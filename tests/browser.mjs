@@ -121,6 +121,12 @@ try {
         });
         pass(`desktop ${name} renders without horizontal overflow`);
     }
+    await page.goto(base + "/admin/files");
+    assert.match(
+        await page.locator(".files-table .time-value").first().innerText(),
+        /\d{4}年\d{1,2}月\d{1,2}日\s+\d{2}:\d{2}:\d{2}/,
+    );
+    pass("download timestamps use readable Chinese dates with seconds");
     // Real navigation, interruption, browser history and keyboard dismissal.
     await page.goto(base + "/admin/files?q=" + encodeURIComponent("产品设计"));
     const listUrl = page.url();

@@ -51,3 +51,7 @@ body{font-size:14px}.eyebrow{font-size:11px}.nav-label{font-size:11px}.nav-item{
   .files-table tbody td.selection-cell{top:14px;right:12px}
   .files-table .selection-cell .checkbox-label{min-width:44px;min-height:44px}
 }
+/* Human-readable Chinese dates keep seconds, with a natural date/time line break. */
+.time-value{display:inline-block;max-width:100%;white-space:normal;overflow-wrap:normal;word-break:normal;line-height:1.65}
+.event-properties dd,.property-list dd.mono,.timezone-preview>strong,.audit-list time{white-space:normal;overflow-wrap:break-word;line-height:1.65}
+@media(max-width:760px){.events-table .time-value,.files-table .time-value{white-space:normal;overflow-wrap:normal;word-break:normal}.timezone-preview>strong{font-size:16px;letter-spacing:0}}

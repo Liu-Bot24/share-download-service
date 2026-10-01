@@ -67,7 +67,7 @@ function format_time(int|string|null $value, ?string $tz = null): string
             : new DateTimeImmutable($value);
         return $d
             ->setTimezone(new DateTimeZone($tz ?? share_store()->settings()["timezone"]))
-            ->format("Y-m-d H:i:s");
+            ->format("Y年n月j日 H:i:s");
     } catch (Throwable) {
         return "时间不可用";
     }

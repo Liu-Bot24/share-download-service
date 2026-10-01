@@ -362,9 +362,9 @@
     if (!timezoneSelect) return;
     try {
       const now = new Date();
-      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezoneSelect.value, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezoneSelect.value, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(now);
       const get = type => parts.find(part => part.type === type)?.value || '';
-      $('[data-timezone-preview]').textContent = `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
+      $('[data-timezone-preview]').textContent = `${get('year')}年${get('month')}月${get('day')}日 ${get('hour')}:${get('minute')}:${get('second')}`;
       const offset = new Intl.DateTimeFormat('en', { timeZone: timezoneSelect.value, timeZoneName: 'longOffset' }).formatToParts(now).find(part => part.type === 'timeZoneName')?.value || '';
       $('[data-timezone-offset]').textContent = `${offset} · ${timezoneSelect.value}`;
     } catch { $('[data-timezone-offset]').textContent = `${timezoneSelect.value} · 保存后由服务器显示`; }

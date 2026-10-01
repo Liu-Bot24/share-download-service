@@ -477,7 +477,7 @@ $tests["local geography provider falls back honestly without a network call"] = 
 $tests["timezone second-level display DST boundaries and analytics reconcile"] = function () {
     [$s, $f] = setup();
     $q = new QueryService($s);
-    same("2026-01-01 08:00:01", format_time(1767225601, "Asia/Shanghai"));
+    same("2026年1月1日 08:00:01", format_time(1767225601, "Asia/Shanghai"));
     $s->saveSettings(["timezone" => "America/New_York", "session_ttl" => 86400], "test");
     $r = $q->range(["start" => "2026-03-08", "end" => "2026-03-08"]);
     same(23 * 3600, $r["until"] - $r["from"]);
