@@ -442,6 +442,9 @@ $tests[
         ["10.0.0.0/8"],
     );
     same("198.51.100.4", $c["ip"]);
+    $withoutHeader = RequestContext::capture(["REMOTE_ADDR" => "10.0.0.5"], ["10.0.0.0/8"]);
+    same("10.0.0.5", $withoutHeader["ip"]);
+    same("peer", $withoutHeader["ip_source"]);
     ok(RequestContext::trusted("2001:db8::4", ["2001:db8::/32"]));
     same(
         "example.com/a",

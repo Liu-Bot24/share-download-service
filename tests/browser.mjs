@@ -253,6 +253,27 @@ try {
             ),
             `${name} mobile overflow`,
         );
+        if (name === "files") {
+            const collisions = await page.evaluate(
+                () =>
+                    Array.from(document.querySelectorAll("[data-file-row]")).filter((row) => {
+                        const title = row.querySelector(".file-primary .file-name");
+                        const checkbox = row.querySelector(".selection-cell .checkbox-label");
+                        if (!title || !checkbox) return false;
+                        const range = document.createRange();
+                        range.selectNodeContents(title);
+                        const box = checkbox.getBoundingClientRect();
+                        return Array.from(range.getClientRects()).some(
+                            (rect) =>
+                                rect.top < box.bottom &&
+                                rect.bottom > box.top &&
+                                rect.right > box.left - 4,
+                        );
+                    }).length,
+            );
+            assert.equal(collisions, 0, "phone filenames do not overlap selection controls");
+            pass("mobile long filenames clear their selection controls");
+        }
         await page.screenshot({
             path: path.join(artifacts, `mobile-${name}.png`),
             fullPage: true,

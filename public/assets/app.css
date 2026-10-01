@@ -42,3 +42,12 @@ body{font-size:14px}.eyebrow{font-size:11px}.nav-label{font-size:11px}.nav-item{
 /* Verified color pairs: status copy and small canvas text retain AA contrast. */
 .badge-active,.transfer-server_finished{color:#207647}.badge-paused,.badge-trashed,.badge-destroyed,.transfer-unknown{color:#626873}.small-badge{color:#626873}.settings-navigation>a.active{color:#356396}.segmented>a{color:#626d7e}.quota-preview{color:#4d6d97}.page-footer,.page-footer>span:last-child,.definition-note,.page-heading p,.eyebrow,.analytics-range-note,.form-save-bar>span,.topbar-meta,.breadcrumb,.nav-label,.sidebar-note,.sidebar-note small,.brand small{color:#656d79}.page-footer>a{color:#516883}.danger-zone>summary{color:#a64b56}.pending-jobs h3,.pending-jobs>a{color:#80652b}
 @media(max-width:760px){.chart-date-optional{display:none}}
+/* Reserve a separate, 44px selection target alongside multiline mobile filenames. */
+@media(max-width:760px){
+  .files-table tbody td.file-primary{width:calc(100% - 64px);padding-right:0!important;justify-self:start}
+  .files-table .file-primary .table-file{width:100%;align-items:flex-start}
+  .files-table .file-primary .table-file>div{flex:1;min-width:0;max-width:100%}
+  .files-table .file-primary .file-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;word-break:normal;max-width:100%}
+  .files-table tbody td.selection-cell{top:14px;right:12px}
+  .files-table .selection-cell .checkbox-label{min-width:44px;min-height:44px}
+}

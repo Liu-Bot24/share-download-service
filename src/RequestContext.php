@@ -16,8 +16,10 @@ final class RequestContext
                 ",",
                 substr((string) ($server["HTTP_X_FORWARDED_FOR"] ?? ""), 0, 2048),
             );
-            $chain[] = $peer;
             for ($i = count($chain) - 1; $i >= 0; $i--) {
+                if (!self::trusted($ip, $trustedProxies)) {
+                    break;
+                }
                 $candidate = self::normalIp(trim($chain[$i]));
                 if ($candidate === "unknown") {
                     break;
