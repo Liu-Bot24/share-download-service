@@ -1,0 +1,46 @@
+name: Verify Share Files
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: "8.2"
+          extensions: pdo_sqlite, sqlite3, fileinfo, mbstring, pcntl
+          coverage: none
+      - name: Install locked PHP dependencies
+        run: composer install --no-dev --no-interaction --prefer-dist --no-scripts
+      - name: Syntax and transactional core
+        run: |
+          find src public scripts templates tests -name '*.php' -exec php -l {} \;
+          php tests/run.php
+      - name: Live isolated HTTP regressions
+        run: python3 tests/http_test.py
+      - name: Install pinned browser test runtime
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Desktop and phone browser regressions
+        run: node tests/browser.mjs
+      - name: Save synthetic visual evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: share-ui-evidence
+          path: artifacts/browser/
+          retention-days: 7
+          if-no-files-found: ignore

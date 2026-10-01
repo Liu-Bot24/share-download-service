@@ -1,132 +1,87 @@
 <?php
 declare(strict_types=1);
 
-function manager_state(ShareStore $store, string $path): array
+function manager_state(ShareStore $store): array
 {
-    $storage = dirname(__DIR__) . '/storage';
-    $sessions = $storage . '/sessions';
-    if (!is_dir($sessions) && !mkdir($sessions, 0700, true) && !is_dir($sessions)) {
-        throw new RuntimeException('Could not create session directory.');
+    $dir = $store->storageDir . "/sessions";
+    if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+        throw new RuntimeException("Cannot create session storage");
     }
-    ini_set('session.use_strict_mode', '1');
-    ini_set('session.gc_maxlifetime', '43200');
-    session_save_path($sessions);
-    session_name('share_manager');
-    session_set_cookie_params(['lifetime' => 0, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Strict']);
+    ini_set("session.use_strict_mode", "1");
+    ini_set("session.gc_maxlifetime", "43200");
+    ini_set("session.use_only_cookies", "1");
+    session_save_path($dir);
+    session_name("share_manager");
+    session_set_cookie_params([
+        "lifetime" => 0,
+        "path" => "/",
+        "secure" => str_starts_with(canonical_base(), "https://"),
+        "httponly" => true,
+        "samesite" => "Strict",
+    ]);
     session_start();
-    header('Cache-Control: no-store');
-    header('X-Frame-Options: DENY');
-    header('X-Content-Type-Options: nosniff');
-    $_SESSION['csrf'] ??= bin2hex(random_bytes(32));
-    $admin = isset($_SESSION['admin_until']) && $_SESSION['admin_until'] > time();
-    $message = $_SESSION['message'] ?? '';
-    unset($_SESSION['message']);
-    $error = '';
-
-    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-        $json = str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json');
-        try {
-            $csrf = $_POST['csrf'] ?? '';
-            if (!is_string($csrf) || !hash_equals($_SESSION['csrf'], $csrf)) {
-                http_response_code(403);
-                throw new InvalidArgumentException('页面已过期或请求无效，请刷新后重试。');
-            }
-            if ($path === '/manage/login') {
-                $username = $_POST['username'] ?? '';
-                $password = $_POST['password'] ?? '';
-                if (!is_string($username) || !is_string($password) || !manager_login($storage, $username, $password)) {
-                    http_response_code(401);
-                    throw new InvalidArgumentException('账号或密码不正确。');
-                }
-                session_regenerate_id(true);
-                $_SESSION['admin_until'] = time() + 43200;
-                $_SESSION['csrf'] = bin2hex(random_bytes(32));
-                $message = '已登录，可以上传和管理文件。';
-            } else {
-                if (!$admin) {
-                    http_response_code(403);
-                    throw new InvalidArgumentException('请先登录管理账号。');
-                }
-                switch ($path) {
-                    case '/manage/upload':
-                        $upload = $_FILES['file'] ?? [];
-                        if (!is_array($upload)) throw new InvalidArgumentException('请选择文件。');
-                        $name = $store->upload($upload);
-                        $message = '上传成功：' . $name;
-                        break;
-                    case '/manage/delete':
-                        $name = $_POST['name'] ?? '';
-                        if (!is_string($name)) throw new InvalidArgumentException('无效的文件名。');
-                        $store->trash($name);
-                        $message = '已删除：' . $name . '（已移入回收目录）';
-                        break;
-                    case '/manage/logout':
-                        $_SESSION = ['csrf' => bin2hex(random_bytes(32))];
-                        session_regenerate_id(true);
-                        $message = '已退出管理。';
-                        break;
-                    default:
-                        http_response_code(404);
-                        throw new InvalidArgumentException('操作不存在。');
-                }
-            }
-            $_SESSION['message'] = $message;
-            session_write_close();
-            if ($json) {
-                header('Content-Type: application/json; charset=utf-8');
-                echo json_encode(['ok' => true, 'message' => $message], JSON_UNESCAPED_UNICODE);
-            } else {
-                header('Location: /', true, 303);
-            }
-            exit;
-        } catch (InvalidArgumentException | OutOfBoundsException $exception) {
-            if (http_response_code() < 400) http_response_code(400);
-            $error = $exception->getMessage();
-        } catch (Throwable $exception) {
-            error_log('Share manager: ' . $exception->getMessage());
-            http_response_code(500);
-            $error = '操作未完成，请稍后重试。';
-        }
-        if ($json) {
-            session_write_close();
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['ok' => false, 'message' => $error], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-    }
-    $state = ['admin' => $admin, 'csrf' => $_SESSION['csrf'], 'message' => $message, 'error' => $error];
+    $_SESSION["csrf"] ??= bin2hex(random_bytes(32));
+    $admin = isset($_SESSION["admin_until"]) && $_SESSION["admin_until"] > time();
+    $state = [
+        "admin" => $admin,
+        "csrf" => $_SESSION["csrf"],
+        "username" => $admin ? $_SESSION["username"] ?? "manager" : "",
+        "binding" => $admin ? hash("sha256", session_id()) : null,
+        "message" => $_SESSION["message"] ?? "",
+        "error" => "",
+    ];
+    unset($_SESSION["message"]);
     session_write_close();
     return $state;
 }
-
-function manager_login(string $storage, string $username, string $password): bool
+function check_csrf(array $manager): void
 {
-    $directory = $storage . '/login-attempts';
-    if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
-        throw new RuntimeException('Could not create login protection directory.');
+    $v = $_POST["csrf"] ?? "";
+    if (!is_string($v) || !hash_equals($manager["csrf"], $v)) {
+        throw new ShareError("csrf", "页面已过期或请求无效，请刷新后重试", 403);
     }
-    // Bound the number of rate-limit files even with changing client addresses.
-    $bucket = substr(hash('sha256', $_SERVER['REMOTE_ADDR'] ?? ''), 0, 3);
-    $handle = fopen($directory . '/' . $bucket . '.json', 'c+');
-    if (!$handle) throw new RuntimeException('Could not open login protection.');
-    try {
-        if (!flock($handle, LOCK_EX)) throw new RuntimeException('Could not lock login protection.');
-        $data = json_decode(stream_get_contents($handle) ?: '{}', true) ?: [];
-        if (($data['until'] ?? 0) <= time()) $data = ['attempts' => 0, 'until' => time() + 900];
-        if ($data['attempts'] >= 8) {
-            http_response_code(429);
-            throw new InvalidArgumentException('登录失败次数过多，请 15 分钟后重试。');
-        }
-        $config = json_decode(file_get_contents($storage . '/manager.json'), true, 512, JSON_THROW_ON_ERROR);
-        $validPassword = password_verify($password, $config['password_hash']);
-        $valid = hash_equals($config['username'], $username) && $validPassword;
-        $data['attempts'] = $valid ? 0 : $data['attempts'] + 1;
-        rewind($handle);
-        ftruncate($handle, 0);
-        if (fwrite($handle, json_encode($data)) === false) throw new RuntimeException('Could not save login protection.');
-        fflush($handle);
-        return $valid;
-    } finally {
-        fclose($handle);
+}
+function manager_login(ShareStore $store, string $user, string $pass): void
+{
+    $ip = request_context()["ip"];
+    $keys = ["admin:" . hash("sha256", $ip), "admin:global"];
+    $store->rateCheck($keys, [8, 100]);
+    $path = $store->storageDir . "/manager.json";
+    if (!is_readable($path)) {
+        throw new ShareError("setup", "管理账号尚未配置，请先运行账号初始化命令", 503);
     }
+    $c = json_decode((string) file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
+    $valid =
+        password_verify($pass, (string) ($c["password_hash"] ?? "")) &&
+        hash_equals((string) ($c["username"] ?? ""), $user);
+    if (!$valid) {
+        $store->rateFailure($keys);
+        throw new ShareError("login", "账号或密码不正确", 401);
+    }
+    session_start();
+    session_regenerate_id(true);
+    $_SESSION["admin_until"] = time() + 43200;
+    $_SESSION["username"] = $user;
+    $_SESSION["csrf"] = bin2hex(random_bytes(32));
+    session_write_close();
+    $store->audit($user, "login", null);
+}
+function manager_logout(ShareStore $store, array $manager): void
+{
+    $store->db->run('UPDATE sessions SET expires_at=? WHERE actor=\'admin\' AND admin_binding=?', [
+        time(),
+        $manager["binding"],
+    ]);
+    $store->audit($manager["username"], "logout", null);
+    session_start();
+    $_SESSION = [];
+    session_regenerate_id(true);
+    $_SESSION["csrf"] = bin2hex(random_bytes(32));
+    session_write_close();
+}
+function flash(string $message): void
+{
+    session_start();
+    $_SESSION["message"] = $message;
+    session_write_close();
 }

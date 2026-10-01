@@ -1,0 +1,12 @@
+{
+    "name": "liu-bot24/share-download-service",
+    "description": "Private PHP file-sharing workspace with local GeoIP",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "ext-pdo": "*",
+        "ext-pdo_sqlite": "*",
+        "maxmind-db/reader": "1.14.0"
+    },
+    "config": {"sort-packages": true, "allow-plugins": false}
+}

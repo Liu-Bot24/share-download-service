@@ -1,54 +1,46 @@
 <?php
 declare(strict_types=1);
-
-require_once __DIR__ . '/../src/bootstrap.php';
-
-if (PHP_SAPI !== 'cli') {
-    fwrite(STDERR, "This script is CLI-only.\n");
+require_once __DIR__ . "/../src/bootstrap.php";
+if (PHP_SAPI !== "cli") {
     exit(1);
 }
-
-$source = $argv[1] ?? '';
-$publicName = $argv[2] ?? basename($source);
-$mimeType = $argv[3] ?? guess_mime_type($source);
-
-if ($source === '') {
-    fwrite(STDERR, "Usage: php scripts/import-file.php <source-path> [public-name] [mime-type]\n");
-    exit(1);
-}
-
-$root = dirname(__DIR__);
-$targetDir = $root . '/files';
-if (!is_dir($targetDir) && !mkdir($targetDir, 0770, true) && !is_dir($targetDir)) {
-    fwrite(STDERR, "Could not create files directory.\n");
-    exit(1);
-}
-$targetName = basename(str_replace('\\', '/', $publicName));
-$targetPath = $targetDir . '/' . $targetName;
-if (!copy($source, $targetPath)) {
-    fwrite(STDERR, "Could not copy file.\n");
-    exit(1);
-}
-chmod($targetPath, 0640);
-$record = share_store()->get($targetName);
-if (!$record) {
-    fwrite(STDERR, "Imported file could not be read.\n");
-    exit(1);
-}
-echo json_encode([
-    'name' => $record['name'],
-    'bytes' => $record['bytes'],
-    'sha256' => $record['sha256'],
-    'path' => '/d/' . rawurlencode((string) $record['name']),
-], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
-
-function guess_mime_type(string $path): string
-{
-    if (function_exists('mime_content_type') && is_file($path)) {
-        $type = mime_content_type($path);
-        if (is_string($type) && $type !== '') {
-            return $type;
+try {
+    $source = $argv[1] ?? "";
+    $name = $argv[2] ?? basename($source);
+    ShareStore::validName($name);
+    if (!is_file($source) || is_link($source) || !is_readable($source)) {
+        throw new RuntimeException("A readable regular source file is required.");
+    }
+    $store = share_store();
+    $target = $store->filesDir . "/" . $name;
+    $stage = $store->filesDir . "/.import-" . bin2hex(random_bytes(8));
+    if (!copy($source, $stage)) {
+        throw new RuntimeException("Cannot stage import.");
+    }
+    try {
+        chmod($stage, 0600);
+        if (file_exists($target) || is_link($target) || !link($stage, $target)) {
+            throw new RuntimeException("The destination exists; imports never overwrite files.");
+        }
+    } finally {
+        if (is_file($stage)) {
+            unlink($stage);
         }
     }
-    return str_ends_with(strtolower($path), '.json') ? 'application/json' : 'application/octet-stream';
+    $store->scan("cli");
+    $rows = $store->db->all("SELECT * FROM files WHERE storage_name=? ORDER BY id DESC", [$name]);
+    $f = $store->file((int) $rows[0]["id"]);
+    echo json_encode(
+        [
+            "id" => $f["id"],
+            "name" => $f["name"],
+            "bytes" => $f["bytes"],
+            "sha256" => $f["sha256"],
+            "url" => public_download_url($f),
+        ],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+    ) . "\n";
+} catch (Throwable $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(1);
 }
