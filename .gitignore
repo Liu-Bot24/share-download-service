@@ -7,4 +7,9 @@ files/
 *.log
 ._*
 .DS_Store
+storage/
+AGENTS.md
+*OPERATOR*.md
+artifacts/
+baseline/
 

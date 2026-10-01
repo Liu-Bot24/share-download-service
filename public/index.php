@@ -11,12 +11,14 @@ if (preg_match('#^/d/(.+)$#', $path, $matches)) {
     exit;
 }
 
-if ($path !== '/') {
+if ($path !== '/' && !in_array($path, ['/manage/login', '/manage/logout', '/manage/upload', '/manage/delete'], true)) {
     http_response_code(404);
     echo 'Not found';
     exit;
 }
 
+require_once __DIR__ . '/../src/manager.php';
+$manager = manager_state($store, $path);
 $files = $store->listFiles();
 $totalDownloads = array_sum(array_map(static fn (array $file): int => (int) $file['downloads'], $files));
 ?>
@@ -96,6 +98,22 @@ $totalDownloads = array_sum(array_map(static fn (array $file): int => (int) $fil
         .button.primary:hover { background: var(--accent-dark); }
         .empty { padding: 42px 18px; text-align: center; color: var(--muted); }
         .copied { color: var(--accent); font-size: 12px; min-width: 44px; }
+        .management { padding: 20px; margin-bottom: 18px; }
+        .management h2 { font-size: 18px; margin: 0 0 8px; }
+        .management p { color: var(--muted); margin: 0 0 14px; }
+        .form-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        label { display: grid; gap: 5px; }
+        input { font: inherit; max-width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 6px; }
+        input[type=file] { flex: 1; min-width: 0; background: #fbfcfd; }
+        summary { cursor: pointer; font-weight: 650; }
+        details[open] summary { margin-bottom: 16px; }
+        .notice { padding: 12px 16px; background: #e9f6ef; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
+        .notice.error { background: #fff0ef; color: #a62b25; }
+        .button.danger { color: #b1302b; border-color: #ecc9c7; }
+        .button:disabled { opacity: .6; cursor: wait; }
+        .management-top { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+        progress { width: 100%; height: 10px; margin-top: 15px; accent-color: var(--accent); }
+        #upload-status { margin-top: 8px; overflow-wrap: anywhere; }
         @media (max-width: 760px) {
             header { align-items: stretch; flex-direction: column; }
             .metric { text-align: left; }
@@ -113,13 +131,42 @@ $totalDownloads = array_sum(array_map(static fn (array $file): int => (int) $fil
         <header>
             <div>
                 <h1>Share Files</h1>
-                <div class="summary"><?= count($files) ?> 个文件，来自宝塔目录 <code>files/</code>；下载时自动计数。</div>
+                <div class="summary"><?= count($files) ?> 个分享文件 · 下载时自动计数</div>
             </div>
             <div class="metric">
                 <strong><?= h((string) $totalDownloads) ?></strong>
                 <span>总下载次数</span>
             </div>
         </header>
+
+        <?php if ($manager['message']): ?><div class="notice" role="status"><?= h($manager['message']) ?></div><?php endif; ?>
+        <?php if ($manager['error']): ?><div class="notice error" role="alert"><?= h($manager['error']) ?></div><?php endif; ?>
+        <section class="panel management" aria-label="文件管理">
+            <?php if ($manager['admin']): ?>
+                <div class="management-top">
+                    <div><h2>上传文件</h2><p>选择本地文件即可分享。单个文件最多 45 MB，同名文件不会被覆盖。</p></div>
+                    <form action="/manage/logout" method="post"><input type="hidden" name="csrf" value="<?= h($manager['csrf']) ?>"><button class="button">退出管理</button></form>
+                </div>
+                <form id="upload-form" action="/manage/upload" method="post" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf" value="<?= h($manager['csrf']) ?>">
+                    <input type="hidden" name="MAX_FILE_SIZE" value="<?= ShareStore::MAX_UPLOAD_BYTES ?>">
+                    <div class="form-row"><input type="file" name="file" aria-label="选择要上传的文件" required><button class="button primary" type="submit">上传文件</button></div>
+                    <progress id="upload-progress" max="100" value="0" hidden aria-label="上传进度"></progress>
+                    <div id="upload-status" role="status" aria-live="polite"></div>
+                </form>
+            <?php else: ?>
+                <details <?= $manager['error'] ? 'open' : '' ?>>
+                    <summary>管理登录</summary>
+                    <p>登录后可以上传和删除文件。</p>
+                    <form action="/manage/login" method="post" class="form-row">
+                        <input type="hidden" name="csrf" value="<?= h($manager['csrf']) ?>">
+                        <label>账号<input name="username" autocomplete="username" required></label>
+                        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+                        <button class="button primary" type="submit">登录</button>
+                    </form>
+                </details>
+            <?php endif; ?>
+        </section>
 
         <section class="panel">
             <?php if (!$files): ?>
@@ -148,6 +195,13 @@ $totalDownloads = array_sum(array_map(static fn (array $file): int => (int) $fil
                                 <div class="actions">
                                     <a class="button primary" href="<?= h($url) ?>">下载</a>
                                     <button class="button" type="button" data-copy="<?= h($url) ?>">复制链接</button>
+                                    <?php if ($manager['admin']): ?>
+                                    <form method="post" action="/manage/delete" data-delete="<?= h($file['name']) ?>">
+                                        <input type="hidden" name="csrf" value="<?= h($manager['csrf']) ?>">
+                                        <input type="hidden" name="name" value="<?= h($file['name']) ?>">
+                                        <button class="button danger" type="submit">删除</button>
+                                    </form>
+                                    <?php endif; ?>
                                     <span class="copied" aria-live="polite"></span>
                                 </div>
                             </td>
@@ -159,6 +213,42 @@ $totalDownloads = array_sum(array_map(static fn (array $file): int => (int) $fil
         </section>
     </main>
     <script>
+        document.querySelectorAll('[data-delete]').forEach(form => form.addEventListener('submit', event => {
+            if (!confirm(`确定删除「${form.dataset.delete}」吗？\n删除后分享链接将失效，文件会移入服务器回收目录。`)) event.preventDefault();
+        }));
+        const uploadForm = document.querySelector('#upload-form');
+        uploadForm?.addEventListener('submit', event => {
+            event.preventDefault();
+            const file = uploadForm.elements.file.files[0];
+            const status = document.querySelector('#upload-status');
+            const progress = document.querySelector('#upload-progress');
+            const button = uploadForm.querySelector('button');
+            if (!file) return;
+            if (file.size > <?= ShareStore::MAX_UPLOAD_BYTES ?>) { status.textContent = '文件过大，单个文件最多 45 MB。'; return; }
+            const request = new XMLHttpRequest();
+            request.open('POST', uploadForm.action);
+            request.setRequestHeader('Accept', 'application/json');
+            request.timeout = 30 * 60 * 1000;
+            button.disabled = true;
+            progress.hidden = false;
+            progress.value = 0;
+            status.textContent = '正在上传，请勿关闭页面…';
+            request.upload.onprogress = e => {
+                if (e.lengthComputable) {
+                    progress.value = Math.round(e.loaded / e.total * 100);
+                    status.textContent = progress.value === 100 ? '上传完成，正在保存…' : `正在上传 ${progress.value}%`;
+                }
+            };
+            request.onload = () => {
+                let result;
+                try { result = JSON.parse(request.responseText); } catch { result = {message: request.status === 413 ? '文件过大，请选择 45 MB 以内的文件。' : '上传未完成，请刷新页面确认后重试。'}; }
+                if (request.status >= 200 && request.status < 300 && result.ok) { window.location.assign('/'); return; }
+                status.textContent = result.message;
+                button.disabled = false;
+            };
+            request.onerror = request.ontimeout = () => { status.textContent = '连接中断，请刷新页面确认上传结果后重试。'; button.disabled = false; };
+            request.send(new FormData(uploadForm));
+        });
         document.addEventListener('click', async (event) => {
             const button = event.target.closest('[data-copy]');
             if (!button) return;

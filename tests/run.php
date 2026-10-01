@@ -91,6 +91,58 @@ $tests['does not list stale stats for files removed from the mapped directory'] 
     Assert::same([], $store->listFiles(), 'removed files should disappear from dashboard');
 };
 
+$tests['deletion preserves content and download metadata in recycle directory'] = function (): void {
+    $tmp = make_temp_dir();
+    $store = new ShareStore($tmp . '/files', $tmp . '/storage/stats.json');
+    file_put_contents($tmp . '/files/中文 文件.txt', 'recover me');
+    $store->recordDownload('中文 文件.txt');
+    $store->trash('中文 文件.txt');
+    Assert::same([], $store->listFiles(), 'deleted file must disappear');
+    Assert::same(null, $store->get('中文 文件.txt'), 'deleted link must stop working');
+    $archives = glob($tmp . '/storage/trash/*');
+    Assert::same(1, count($archives), 'one recoverable archive');
+    Assert::same('recover me', file_get_contents($archives[0] . '/file'), 'content preserved');
+    $meta = json_decode(file_get_contents($archives[0] . '/metadata.json'), true);
+    Assert::same(1, $meta['stats']['downloads'], 'download metadata preserved');
+    file_put_contents($tmp . '/files/中文 文件.txt', 'new version');
+    Assert::same(0, $store->get('中文 文件.txt')['downloads'], 'replacement starts fresh');
+};
+
+$tests['rejects hidden names traversal control characters and symbolic links'] = function (): void {
+    $tmp = getenv('SHARE_TEST_SYMLINK_DIR') ?: make_temp_dir();
+    $store = new ShareStore($tmp . '/files', $tmp . '/storage/stats.json');
+    file_put_contents($tmp . '/outside.txt', 'outside');
+    if (!is_link($tmp . '/files/link.txt')) {
+        symlink($tmp . '/outside.txt', $tmp . '/files/link.txt');
+    }
+    Assert::same([], $store->listFiles(), 'links must not be listed');
+    Assert::same(null, $store->get('link.txt'), 'links cannot be downloaded');
+    foreach (['../outside.txt', '.env', "bad\nname", 'folder/file', 'folder\\file'] as $name) {
+        try {
+            $store->trash($name);
+            throw new RuntimeException('unsafe filename was accepted');
+        } catch (InvalidArgumentException) {}
+    }
+    try {
+        $store->trash('link.txt');
+        throw new RuntimeException('symlink deletion was accepted');
+    } catch (OutOfBoundsException) {}
+    Assert::same('outside', file_get_contents($tmp . '/outside.txt'), 'outside file unchanged');
+};
+
+$tests['rejects incomplete and forged uploads'] = function (): void {
+    $tmp = make_temp_dir();
+    $store = new ShareStore($tmp . '/files', $tmp . '/storage/stats.json');
+    file_put_contents($tmp . '/fake.txt', 'fake');
+    foreach ([['error' => UPLOAD_ERR_PARTIAL], ['error' => UPLOAD_ERR_OK, 'name' => 'fake.txt', 'tmp_name' => $tmp . '/fake.txt']] as $upload) {
+        try {
+            $store->upload($upload);
+            throw new RuntimeException('invalid upload was accepted');
+        } catch (InvalidArgumentException) {}
+    }
+    Assert::same([], $store->listFiles(), 'invalid uploads must not appear');
+};
+
 $failures = 0;
 foreach ($tests as $name => $test) {
     try {
