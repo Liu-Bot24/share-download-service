@@ -191,17 +191,41 @@ final class QueryService
                 " ORDER BY count DESC,label LIMIT 20",
             $args,
         );
+        $regions = $group("region");
+        $unknown = $db->one(
+            "SELECT '未知' label,COUNT(*) count,COUNT(DISTINCT ip) unique_ips FROM events WHERE " .
+                $where .
+                " AND region='未知'",
+            $args,
+        );
+        if (
+            (int) $unknown["count"] > 0 &&
+            !in_array("未知", array_column($regions, "label"), true)
+        ) {
+            $regions[] = $unknown;
+        }
+        $withShares = static fn(array $rows): array => array_map(
+            static fn(array $row): array => $row + [
+                "share" =>
+                    (int) $summary["total"] > 0
+                        ? round(((int) $row["count"] / (int) $summary["total"]) * 100, 1)
+                        : 0,
+            ],
+            $rows,
+        );
         return [
             "summary" => array_map(fn($v) => (int) $v, $summary),
             "trend" => array_values($trend),
             "hours" => $hours,
-            "regions" => $group("region"),
-            "referrers" => $group("referrer"),
-            "files" => $db->all(
-                "SELECT file_id id,filename name,COUNT(*) count,COUNT(DISTINCT ip) unique_ips FROM events WHERE " .
-                    $where .
-                    " GROUP BY file_id,filename ORDER BY count DESC,file_id LIMIT 15",
-                $args,
+            "regions" => $withShares($regions),
+            "referrers" => $withShares($group("referrer")),
+            "files" => $withShares(
+                $db->all(
+                    "SELECT file_id id,filename name,COUNT(*) count,COUNT(DISTINCT ip) unique_ips FROM events WHERE " .
+                        $where .
+                        " GROUP BY file_id,filename ORDER BY count DESC,file_id LIMIT 15",
+                    $args,
+                ),
             ),
             "range" => $range,
         ];

@@ -61,6 +61,11 @@ try {
             "Cannot read official DB-IP download page. Existing database retained.",
         );
     }
+    if (!preg_match("#https?://creativecommons\.org/licenses/by/4\.0/?#", $page)) {
+        throw new RuntimeException(
+            "The official page no longer advertises the expected CC BY 4.0 license. Review updated terms before continuing.",
+        );
+    }
     if (
         !preg_match(
             "#https://download\.db-ip\.com/free/dbip-city-lite-([0-9]{4}-[0-9]{2})\.mmdb\.gz#",

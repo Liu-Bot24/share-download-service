@@ -316,9 +316,7 @@ try {
         exit();
     }
     if (in_array($page, ["overview", "analytics"], true)) {
-        $data["analytics"] = $query->analytics(
-            $page === "overview" ? array_merge($_GET, ["days" => 7]) : $_GET,
-        );
+        $data["analytics"] = $query->analytics($page === "overview" ? ["days" => 7] : $_GET);
         $data["events"] = $query->events(["days" => 30], 1, 6)["events"];
         $data["files"] = $store->files();
     }

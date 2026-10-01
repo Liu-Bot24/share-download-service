@@ -292,10 +292,11 @@
     const relative = target.pathname + target.search;
     if (origin) drawerOrigin = origin;
     if (push) {
+      const alreadyShowingDrawer = Boolean(history.state?.sfDrawer);
       const listUrl = history.state?.sfListUrl || location.pathname + location.search;
       if (!history.state?.sfDrawer) history.replaceState({ ...history.state, sfList: true }, '', location.href);
       const state = { sfDrawer: relative, sfListUrl: listUrl };
-      if (replace) history.replaceState(state, '', relative);
+      if (replace || alreadyShowingDrawer) history.replaceState(state, '', relative);
       else history.pushState(state, '', relative);
     }
     drawerFetch?.abort();

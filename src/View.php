@@ -136,7 +136,7 @@ function sf_line_chart(array $points,array $params=[],string $id='download-trend
     for($i=0;$i<=4;$i++){$y=$bottom-$i*($bottom-$ytop)/4;echo '<line x1="'.$left.'" y1="'.$y.'" x2="'.($W-$right).'" y2="'.$y.'" class="chart-grid"/><text x="'.($left-12).'" y="'.($y+4).'" text-anchor="end" class="chart-axis">'.sf_number($step*$i).'</text>';}
     echo '<polygon points="'.$area.'" fill="url(#'.h($id).'-fill)"/><polyline points="'.$poly.'" fill="none" stroke="#0071e3" stroke-width="2.7" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>';
     $showEvery=max(1,(int)ceil(($n-1)/6));
-    foreach($points as$i=>$p){$date=(string)($p['date']??$p['label']??'');$label=(string)($p['label']??$date);$href=sf_url('/admin/downloads',array_replace($params,['start'=>$date,'end'=>$date,'days'=>null]));[$x,$y]=$xy[$i];echo '<a href="'.h($href).'" aria-label="'.h($label.'，'.sf_number($p['count']??0).' 次公开下载').'" class="chart-point"><circle cx="'.$x.'" cy="'.$y.'" r="9" fill="transparent"/><circle cx="'.$x.'" cy="'.$y.'" r="'.($n<=14?3:2).'" fill="#fff" stroke="#0071e3" stroke-width="2"/><title>'.h($label).' · '.sf_number($p['count']??0).' 次</title></a>';if($i%$showEvery===0||$i===$n-1)echo '<text x="'.$x.'" y="234" text-anchor="'.($i===0?'start':($i===$n-1?'end':'middle')).'" class="chart-axis">'.h(strlen($label)>7?substr($label,-5):$label).'</text>';}
+    foreach($points as$i=>$p){$date=(string)($p['date']??$p['label']??'');$label=(string)($p['label']??$date);$href=sf_url('/admin/downloads',array_replace($params,['start'=>$date,'end'=>$date,'days'=>null]));[$x,$y]=$xy[$i];echo '<a href="'.h($href).'" aria-label="'.h($label.'，'.sf_number($p['count']??0).' 次公开下载').'" class="chart-point"><circle cx="'.$x.'" cy="'.$y.'" r="9" fill="transparent"/><circle cx="'.$x.'" cy="'.$y.'" r="'.($n<=14?3:2).'" fill="#fff" stroke="#0071e3" stroke-width="2"/><title>'.h($label).' · '.sf_number($p['count']??0).' 次</title></a>';if($i%$showEvery===0||$i===$n-1)echo '<text x="'.$x.'" y="234" text-anchor="'.($i===0?'start':($i===$n-1?'end':'middle')).'" class="chart-axis'.($i>0&&$i<$n-1&&intdiv($i,$showEvery)%2===1?' chart-date-optional':'').'">'.h(strlen($label)>7?substr($label,-5):$label).'</text>';}
     echo '</svg></div><details class="chart-data"><summary>查看逐日数据'.sf_icon('chevron-down').'</summary><div class="chart-data-grid">';
     foreach($points as$p){$date=(string)($p['date']??$p['label']??'');echo '<a href="'.h(sf_url('/admin/downloads',array_replace($params,['start'=>$date,'end'=>$date,'days'=>null]))).'"><span>'.h($p['label']??$date).'</span><strong>'.sf_number($p['count']??0).'</strong></a>';}
     echo '</div></details>';
@@ -144,8 +144,18 @@ function sf_line_chart(array $points,array $params=[],string $id='download-trend
 function sf_rank_list(array $rows,string $kind,array $params=[],int $limit=6): void
 {
     if(!$rows){sf_empty($kind==='files'?'file':'globe','暂无可分析的记录','这个时间范围内还没有公开下载。');return;}
-    $rows=array_slice($rows,0,$limit);$total=array_sum(array_map(static fn($r)=>(int)($r['count']??0),$rows));$max=max(1,...array_map(static fn($r)=>(int)($r['count']??0),$rows));
-    echo '<ol class="rank-list">';foreach($rows as$i=>$row){$name=(string)($row['label']??$row['name']??'未知');$count=(int)($row['count']??0);$key=match($kind){'files'=>'file_id','regions'=>'region',default=>'referrer'};$value=$kind==='files'?($row['id']??$row['file_id']??''):($row['value']??$row['label']??'');if($kind==='referrers'&&$value==='')$value='__direct__';echo '<li><a href="'.h(sf_url('/admin/downloads',array_replace($params,[$key=>$value]))).'" class="rank-row"><span class="rank-index">'.($i+1).'</span><div class="rank-info"><div class="rank-label"><span title="'.h($name).'">'.h($name?:'直接访问 / 未提供来源').'</span><strong>'.sf_number($count).'<small> 次</small></strong></div><div class="rank-bar"><span style="width:'.round($count/$max*100,2).'%"></span></div>';if(isset($row['unique_ips']))echo '<small>'.sf_number($row['unique_ips']).' 个独立 IP'.(isset($row['share'])?' · '.h($row['share']).'%':'').'</small>';echo '</div>'.sf_icon('chevron').'</a></li>'; }echo '</ol>';
+    $limit=max(1,$limit);
+    $unknown=null;
+    foreach($rows as$index=>&$row){
+        $row['_rank']=$index+1;
+        if($kind==='regions'&&($row['label']??'')==='未知')$unknown=$row;
+    }
+    unset($row);
+    $rows=array_slice($rows,0,$limit);
+    // Unknown is evidence too: reserve a visible row even when it falls outside the top N.
+    if($unknown&&!array_filter($rows,static fn($row)=>($row['label']??'')==='未知')){$unknown['_rank']='—';$rows[count($rows)-1]=$unknown;}
+    $max=max(1,...array_map(static fn($r)=>(int)($r['count']??0),$rows));
+    echo '<ol class="rank-list">';foreach($rows as$i=>$row){$name=(string)($row['label']??$row['name']??'未知');$count=(int)($row['count']??0);$key=match($kind){'files'=>'file_id','regions'=>'region',default=>'referrer'};$value=$kind==='files'?($row['id']??$row['file_id']??''):($row['value']??$row['label']??'');if($kind==='referrers'&&$value==='')$value='__direct__';echo '<li><a href="'.h(sf_url('/admin/downloads',array_replace($params,[$key=>$value]))).'" class="rank-row"><span class="rank-index">'.($row['_rank']??$i+1).'</span><div class="rank-info"><div class="rank-label"><span title="'.h($name).'">'.h($name?:'直接访问 / 未提供来源').'</span><strong>'.sf_number($count).'<small> 次</small></strong></div><div class="rank-bar"><span style="width:'.round($count/$max*100,2).'%"></span></div>';if(isset($row['unique_ips']))echo '<small>'.sf_number($row['unique_ips']).' 个独立 IP'.(isset($row['share'])?' · '.h($row['share']).'%':'').'</small>';echo '</div>'.sf_icon('chevron').'</a></li>'; }echo '</ol>';
 }
 function sf_hours_chart(array $rows): void
 {

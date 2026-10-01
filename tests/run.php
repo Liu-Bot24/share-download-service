@@ -556,6 +556,20 @@ $tests["real MMDB fixture resolves an address entirely locally"] = function () {
     ok(str_starts_with($version, "GeoIP2-City"), "database type/version retained");
     same("未知", RequestContext::geo("1.1.1.1", __DIR__ . "/fixtures/GeoIP2-City-Test.mmdb")[0]);
 };
+$tests["rank shares use all matching sessions and preserve unknown outside Top20"] = function () {
+    [$store, $file] = setup();
+    for ($i = 0; $i < 25; $i++) {
+        $c = ctx();
+        $c["region"] = sprintf("Region %02d", $i);
+        transfer($store, $store->createSession($file["id"], $c));
+    }
+    transfer($store, $store->createSession($file["id"], ctx()));
+    $a = (new QueryService($store))->analytics();
+    same(26, $a["summary"]["total"]);
+    ok(in_array("未知", array_column($a["regions"], "label"), true), "unknown remains present");
+    same(3.8, $a["regions"][0]["share"]);
+    same(100.0, $a["files"][0]["share"]);
+};
 $failures = 0;
 foreach ($tests as $name => $fn) {
     try {
