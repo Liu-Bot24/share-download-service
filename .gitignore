@@ -13,3 +13,10 @@ AGENTS.md
 artifacts/
 baseline/
 
+node_modules/
+test-results/
+playwright-report/
+.env
+.env.*
+
+vendor/
