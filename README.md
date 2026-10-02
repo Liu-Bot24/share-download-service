@@ -5,6 +5,7 @@ A small, private PHP file-sharing workspace for BaoTa/Nginx. Redesigned from the
 ## What is included
 
 - Responsive Chinese overview, file workspace and detail drawer, session history, analytics and settings
+- Public visitor file catalog at `/`, including direct/password downloads and public file metadata; private administration remains under `/admin`
 - Optional per-file password, SHA256 cached during indexing, immutable link aliases and version checks
 - Atomic SQLite quota claims, single-use counting per resumable session, proper GET/HEAD/conditional/single-Range behavior
 - Private administrator download tickets, independent from all public quotas and charts
@@ -89,8 +90,10 @@ The installer discovers the current download only from the official DB-IP page, 
 ```sh
 composer install --no-dev --no-scripts
 php tests/run.php
+php tests/mutations.php             # Requires pcntl + posix: concurrency, fault injection and crash recovery
 python3 tests/backup_test.py        # Isolated CLI backup destination and snapshot checks
 python3 tests/http_test.py          # Starts an isolated PHP fixture; requires php on PATH
+python3 tests/nginx_test.py         # Isolated Nginx routing/log fixture; requires nginx on PATH
 npm ci && npx playwright install chromium
 node tests/browser.mjs             # Isolated desktop/mobile screenshots and interaction suite
 find src public scripts templates tests -name '*.php' -exec php -l {} \;

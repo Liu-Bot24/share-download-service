@@ -117,55 +117,219 @@
     if (event.key === 'Escape') $$('.date-picker[open],.advanced-filters[open]').forEach(details => { details.open = false; });
   });
 
-  // Upload remains an ordinary multipart form: progress never invents a percentage.
+  // Sending progress comes only from XMLHttpRequest upload events; saving needs a server reply.
   const upload = $('#upload-dialog');
   const uploadForm = $('[data-upload-form]');
   const fileInput = $('[data-file-input]');
+  const uploadProgress = $('[data-upload-progress]');
+  const uploadProgressbar = $('[data-upload-progressbar]');
+  const uploadError = $('[data-upload-error]');
+  const uploadConfirmation = $('[data-upload-confirm-close]');
+  let activeUpload = null;
+  let uploadSerial = 0;
   function prettyBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
     return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
   }
   function validateUpload() {
-    if (!fileInput) return false;
+    if (!fileInput || activeUpload) return false;
     const file = fileInput.files?.[0];
-    const error = $('[data-upload-error]');
     let message = '';
     if (fileInput.files?.length > 1) message = '每次请选择一个文件';
     else if (file && file.size > 45 * 1024 * 1024) message = '文件超过 45 MiB，请选择更小的文件';
     fileInput.setCustomValidity(message);
-    if (error) { error.textContent = message; error.hidden = !message; }
+    if (uploadError) { uploadError.textContent = message; uploadError.hidden = !message; }
     $('[data-upload-label]').textContent = file ? file.name : '选择文件，或拖放到这里';
     $('[data-upload-size]').textContent = file ? `${prettyBytes(file.size)} · ${message || '准备就绪'}` : '每次上传一个文件，最大 45 MiB';
     return !message;
   }
-  fileInput?.addEventListener('change', validateUpload);
+  function paintUploadProgress(percent, phase, status, detail) {
+    if (!uploadProgress || !uploadProgressbar) return;
+    uploadProgress.hidden = false;
+    uploadProgress.dataset.phase = phase;
+    $('[data-upload-status]').textContent = status;
+    $('[data-upload-detail]').textContent = detail;
+    uploadProgressbar.removeAttribute('data-stopped');
+    if (percent === null) {
+      uploadProgressbar.removeAttribute('aria-valuenow');
+      uploadProgressbar.setAttribute('aria-valuetext', '浏览器没有提供可计算的总发送量');
+      $('[data-upload-percent]').textContent = '发送中';
+      $('[data-upload-progress-fill]').style.width = '';
+    } else {
+      const observed = Math.max(0, Math.min(100, percent));
+      uploadProgressbar.setAttribute('aria-valuenow', String(observed));
+      uploadProgressbar.setAttribute('aria-valuetext', `${observed}% 已发送${phase === 'saving' ? '，等待服务器保存确认' : ''}`);
+      $('[data-upload-percent]').textContent = `${observed}%`;
+      $('[data-upload-progress-fill]').style.width = `${observed}%`;
+    }
+  }
+  function releaseUploadControls() {
+    clearBusy(uploadForm);
+    uploadForm.removeAttribute('aria-busy');
+    fileInput.disabled = false;
+    $('[data-dropzone]')?.removeAttribute('aria-disabled');
+    $('[data-upload-abort]').hidden = true;
+    $('[data-upload-close]').textContent = '取消';
+    uploadConfirmation.hidden = true;
+  }
+  function finishUploadFailure(run, phase, message, uncertain = false) {
+    if (activeUpload !== run) return;
+    activeUpload = null;
+    releaseUploadControls();
+    uploadProgress.dataset.phase = phase;
+    uploadProgressbar.dataset.stopped = 'true';
+    const observed = uploadProgressbar.getAttribute('aria-valuenow');
+    uploadProgressbar.setAttribute('aria-valuetext', `${observed === null ? '发送总量不可计算' : `已发送 ${observed}%`}；${phase === 'cancelled' ? '连接已取消' : '未确认保存成功'}`);
+    if (observed === null) $('[data-upload-percent]').textContent = '已停止';
+    $('[data-upload-status]').textContent = phase === 'cancelled' ? '上传连接已取消' : '上传未完成';
+    $('[data-upload-detail]').textContent = uncertain
+      ? '无法确认服务器是否已保存。请先检查文件列表，再决定是否重新上传；已有同名文件不会被覆盖。'
+      : '服务器未确认此次保存成功。可以更换文件或修正问题后重新上传。';
+    uploadError.textContent = message;
+    uploadError.hidden = false;
+    $('[data-upload-check]').hidden = !uncertain && run.responseCode !== 'duplicate';
+    $('[data-upload-submit]').textContent = '重新上传';
+  }
+  function beginUpload() {
+    if (!uploadForm || !fileInput || activeUpload || !validateUpload()) return;
+    if (!fileInput.files?.length || !uploadForm.reportValidity()) return;
+    // Capture the file before disabling the picker, so FormData includes the actual payload.
+    const payload = new FormData(uploadForm);
+    const xhr = new XMLHttpRequest();
+    const run = { xhr, serial: ++uploadSerial, sent: false, responseCode: '' };
+    activeUpload = run;
+    uploadError.hidden = true;
+    uploadError.textContent = '';
+    $('[data-upload-check]').hidden = true;
+    uploadConfirmation.hidden = true;
+    paintUploadProgress(0, 'sending', '正在发送文件', '等待浏览器报告实际发送进度。100% 表示发送完成，随后仍需等待服务器保存。');
+    setBusy(uploadForm);
+    fileInput.disabled = true;
+    $('[data-dropzone]')?.setAttribute('aria-disabled', 'true');
+    $('[data-upload-abort]').hidden = false;
+    $('[data-upload-close]').textContent = '关闭';
+    const current = () => activeUpload === run;
+    const sendingFinished = () => {
+      if (!current()) return;
+      run.sent = true;
+      paintUploadProgress(100, 'saving', '发送完成，正在保存', '浏览器已完成发送，正在等待服务器确认保存。此时尚不能认定上传成功。');
+      $('[data-upload-submit]').textContent = '正在保存…';
+    };
+    xhr.upload.addEventListener('progress', event => {
+      if (!current() || run.sent) return;
+      if (event.lengthComputable && event.total > 0) {
+        const percent = Math.min(100, Math.floor(event.loaded / event.total * 100));
+        if (percent === 100) { sendingFinished(); return; }
+        paintUploadProgress(percent, 'sending', '正在发送文件', `已发送 ${prettyBytes(event.loaded)} / ${prettyBytes(event.total)}（含表单数据），等待服务器接收。`);
+      } else {
+        paintUploadProgress(null, 'sending', '正在发送文件', `已发送 ${prettyBytes(event.loaded)}；浏览器未提供总量，因此不显示估算百分比。`);
+      }
+    });
+    xhr.upload.addEventListener('load', sendingFinished);
+    xhr.addEventListener('load', () => {
+      if (!current()) return;
+      const response = xhr.response && typeof xhr.response === 'object' ? xhr.response : null;
+      if (xhr.status >= 200 && xhr.status < 300 && response?.ok === true) {
+        activeUpload = null;
+        releaseUploadControls();
+        paintUploadProgress(100, 'success', '文件已保存', '服务器已确认保存成功，正在打开文件列表。');
+        announce('文件已上传并保存');
+        // This route is deliberately fixed; an untrusted response cannot redirect off-site.
+        location.assign('/admin/files');
+        return;
+      }
+      run.responseCode = typeof response?.code === 'string' ? response.code : '';
+      const message = typeof response?.message === 'string'
+        ? response.message
+        : `没有收到可确认的保存结果${xhr.status ? `（HTTP ${xhr.status}）` : ''}，请检查文件列表后重试。`;
+      finishUploadFailure(run, 'error', message, !response || xhr.status >= 500);
+    });
+    xhr.addEventListener('error', () => finishUploadFailure(run, 'error', '连接中断，未收到服务器的保存确认。', true));
+    xhr.addEventListener('timeout', () => finishUploadFailure(run, 'error', '上传请求等待超时，未收到服务器的保存确认。', true));
+    xhr.addEventListener('abort', () => finishUploadFailure(run, 'cancelled', '已取消当前上传连接；这不会撤回服务器可能已经保存的文件。', true));
+    try {
+      xhr.open('POST', uploadForm.action, true);
+      xhr.responseType = 'json';
+      xhr.timeout = 10 * 60 * 1000;
+      xhr.setRequestHeader('Accept', 'application/json');
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.send(payload);
+    } catch {
+      finishUploadFailure(run, 'error', '无法开始上传，请检查网络连接后重试。', true);
+    }
+  }
+  function abortUpload() {
+    const run = activeUpload;
+    if (!run) return;
+    run.xhr.abort();
+    // Some transports do not emit abort before their request has been dispatched.
+    if (activeUpload === run) finishUploadFailure(run, 'cancelled', '已取消当前上传连接；保存结果需要在文件列表中核对。', true);
+  }
+  function requestUploadClose() {
+    if (!upload?.open) return;
+    if (!activeUpload) { upload.close(); return; }
+    uploadConfirmation.hidden = false;
+    $('[data-upload-keep]').focus({ preventScroll: false });
+  }
+  function resetUpload() {
+    uploadForm?.reset();
+    if (!fileInput) return;
+    releaseUploadControls();
+    uploadProgress.hidden = true;
+    uploadError.hidden = true;
+    $('[data-upload-check]').hidden = true;
+    validateUpload();
+  }
+  fileInput?.addEventListener('change', () => {
+    if (activeUpload) return;
+    uploadProgress.hidden = true;
+    $('[data-upload-check]').hidden = true;
+    clearBusy(uploadForm);
+    validateUpload();
+  });
   const dropzone = $('[data-dropzone]');
   ['dragenter','dragover'].forEach(name => dropzone?.addEventListener(name, event => {
     event.preventDefault();
-    dropzone.classList.add('dragover');
+    if (!activeUpload) dropzone.classList.add('dragover');
   }));
   ['dragleave','drop'].forEach(name => dropzone?.addEventListener(name, event => {
     event.preventDefault();
     dropzone.classList.remove('dragover');
-    if (name === 'drop' && event.dataTransfer?.files.length && fileInput) {
+    if (!activeUpload && name === 'drop' && event.dataTransfer?.files.length && fileInput) {
       fileInput.files = event.dataTransfer.files;
-      validateUpload();
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     }
   }));
-  upload?.addEventListener('close', () => {
-    uploadForm?.reset();
-    if (fileInput) validateUpload();
+  $('[data-upload-abort]')?.addEventListener('click', abortUpload);
+  $('[data-upload-keep]')?.addEventListener('click', () => {
+    uploadConfirmation.hidden = true;
+    $('[data-upload-abort]').focus({ preventScroll: true });
   });
+  $('[data-upload-abort-close]')?.addEventListener('click', () => {
+    abortUpload();
+    upload.close();
+    announce('上传连接已取消；请在文件列表核对是否已经保存');
+  });
+  upload?.addEventListener('cancel', event => { event.preventDefault(); requestUploadClose(); });
+  upload?.addEventListener('close', () => { if (activeUpload) abortUpload(); resetUpload(); });
+  window.addEventListener('beforeunload', event => {
+    if (!activeUpload) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+  window.addEventListener('pagehide', () => { if (activeUpload) abortUpload(); });
   document.addEventListener('click', event => {
     if (event.target.closest('[data-open-upload]')) {
-      if (upload && typeof upload.showModal === 'function') upload.showModal();
-      else announce('浏览器不支持上传窗口，请使用页面底部的上传表单');
+      if (upload && typeof upload.showModal === 'function') {
+        if (!upload.open) upload.showModal();
+      } else announce('浏览器不支持上传窗口，请使用页面底部的上传表单');
     }
     const close = event.target.closest('[data-close-dialog]');
     if (close) {
       const dialog = close.closest('dialog');
       if (dialog === drawer) dismissDrawer();
+      else if (dialog === upload) requestUploadClose();
       else dialog?.close();
     }
   });
@@ -174,6 +338,7 @@
     const box = dialog.getBoundingClientRect();
     if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) return;
     if (dialog === drawer) dismissDrawer();
+    else if (dialog === upload) requestUploadClose();
     else dialog.close();
   }));
 
@@ -397,7 +562,11 @@
   document.addEventListener('submit', event => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement) || event.defaultPrevented) return;
-    if (form.matches('[data-upload-form]') && !validateUpload()) { event.preventDefault(); fileInput?.reportValidity(); return; }
+    if (form.matches('[data-upload-form]') && typeof XMLHttpRequest !== 'undefined') {
+      event.preventDefault();
+      beginUpload();
+      return;
+    }
     if (form.matches('[data-confirm-form]')) {
       const input = $('[name="confirmation"]', form);
       if (input.value !== form.dataset.confirmFilename) {

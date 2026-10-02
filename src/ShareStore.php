@@ -2,12 +2,14 @@
 declare(strict_types=1);
 require_once __DIR__ . "/Database.php";
 require_once __DIR__ . "/RequestContext.php";
+require_once __DIR__ . "/FileMutations.php";
 
 final class ShareStore
 {
     public const MAX_UPLOAD_BYTES = 45 * 1024 * 1024;
     public Database $db;
     public string $storageDir;
+    private FileMutations $mutations;
     public function __construct(public string $filesDir, string $metadataPath)
     {
         $this->storageDir = dirname($metadataPath);
@@ -25,9 +27,15 @@ final class ShareStore
             }
         }
         $this->filesDir = (string) realpath($filesDir);
+        $this->storageDir = (string) realpath($this->storageDir);
         $this->db = new Database($this->storageDir . "/share.sqlite");
+        $this->mutations = new FileMutations($this);
         if (!$this->db->one("SELECT 1 FROM settings WHERE key='legacy_migrated'")) {
-            $this->migrate($metadataPath);
+            $this->mutations->run(function () use ($metadataPath): void {
+                if (!$this->db->one("SELECT 1 FROM settings WHERE key='legacy_migrated'")) {
+                    $this->migrate($metadataPath);
+                }
+            });
         }
     }
     private function migrate(string $path): void
@@ -104,6 +112,10 @@ final class ShareStore
         });
     }
     public function scan(string $actor = "manager", array $legacy = []): array
+    {
+        return $this->mutations->run(fn() => $this->scanCatalog($actor, $legacy));
+    }
+    private function scanCatalog(string $actor, array $legacy): array
     {
         $found = 0;
         $changed = 0;
@@ -309,6 +321,33 @@ final class ShareStore
                 $args,
             ),
         );
+    }
+    public function publicFiles(): array
+    {
+        $out = [];
+        foreach ($this->files(["state" => "active", "sort" => "name"]) as $file) {
+            if (
+                ($file["public_cap"] !== null && $file["public_count"] >= $file["public_cap"]) ||
+                !$this->readable($file)
+            ) {
+                continue;
+            }
+            $out[] = array_intersect_key(
+                $file,
+                array_flip([
+                    "id",
+                    "public_id",
+                    "name",
+                    "bytes",
+                    "mime_type",
+                    "sha256",
+                    "public_count",
+                    "last_public_at",
+                    "has_password",
+                ]),
+            );
+        }
+        return $out;
     }
     public function file(int $id): array
     {
@@ -574,6 +613,8 @@ final class ShareStore
             ) {
                 throw new ShareError("unavailable", "文件不可用", 410);
             }
+            $this->cleanCandidates(100);
+            $this->reserveCandidate($id, $context["ip"], $actor, $binding, $now);
             $this->db->run(
                 "INSERT INTO sessions(token_hash,file_id,version,policy_version,revocation_epoch,actor,admin_binding,created_at,expires_at,ip,ip_source,region,geo_version,referrer) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
@@ -600,6 +641,82 @@ final class ShareStore
             }
         });
         return $token;
+    }
+    /** These limits allocate candidate URLs only; resumed transfers never enter this path. */
+    private function reserveCandidate(
+        int $id,
+        string $ip,
+        string $actor,
+        ?string $binding,
+        int $now,
+    ): void {
+        $keys =
+            $actor === "public"
+                ? [
+                    "candidate:file:" . $id . ":" . hash("sha256", $ip),
+                    "candidate:ip:" . hash("sha256", $ip),
+                    "candidate:global",
+                ]
+                : ["candidate:admin:" . hash("sha256", (string) $binding)];
+        $limits = $actor === "public" ? [40, 180, 1200] : [60];
+        foreach ($keys as $i => $key) {
+            $row = $this->db->one("SELECT * FROM rate_limits WHERE bucket=?", [$key]);
+            $live = $row && (int) $row["until_at"] > $now;
+            if ($live && (int) $row["attempts"] >= $limits[$i]) {
+                throw new ShareError(
+                    "candidate_rate_limit",
+                    "下载链接请求过于频繁，请稍后重试",
+                    429,
+                );
+            }
+            $this->db->run(
+                "INSERT INTO rate_limits(bucket,attempts,until_at) VALUES(?,?,?) ON CONFLICT(bucket) DO UPDATE SET attempts=excluded.attempts,until_at=excluded.until_at",
+                [
+                    $key,
+                    $live ? (int) $row["attempts"] + 1 : 1,
+                    $live ? (int) $row["until_at"] : $now + 60,
+                ],
+            );
+        }
+        if ($actor === "public") {
+            $pending = (int) $this->db->one(
+                "SELECT COUNT(*) n FROM sessions WHERE actor='public' AND claimed_at IS NULL AND expires_at>? AND ip=?",
+                [$now, $ip],
+            )["n"];
+            $all = (int) $this->db->one(
+                "SELECT COUNT(*) n FROM sessions WHERE actor='public' AND claimed_at IS NULL AND expires_at>?",
+                [$now],
+            )["n"];
+            if ($pending >= 300 || $all >= 3000) {
+                throw new ShareError(
+                    "candidate_rate_limit",
+                    "待使用的下载链接过多，请稍后重试",
+                    429,
+                );
+            }
+        }
+    }
+    private function cleanCandidates(int $limit): int
+    {
+        $deleted = $this->db
+            ->run(
+                "DELETE FROM sessions WHERE id IN (SELECT s.id FROM sessions s WHERE s.claimed_at IS NULL AND s.expires_at<=? AND NOT EXISTS(SELECT 1 FROM events e WHERE e.session_id=s.id) AND NOT EXISTS(SELECT 1 FROM transfers t WHERE t.session_id=s.id) ORDER BY s.expires_at LIMIT " .
+                    $limit .
+                    ")",
+                [time()],
+            )
+            ->rowCount();
+        $this->db->run(
+            "DELETE FROM rate_limits WHERE bucket IN (SELECT bucket FROM rate_limits WHERE until_at<=? ORDER BY until_at LIMIT " .
+                $limit .
+                ")",
+            [time()],
+        );
+        return $deleted;
+    }
+    public function collectExpiredCandidates(int $limit = 1000): int
+    {
+        return $this->db->transaction(fn() => $this->cleanCandidates(max(1, min(10000, $limit))));
     }
     public function session(string $token, ?string $binding = null): array
     {
@@ -805,6 +922,14 @@ final class ShareStore
     }
     public function processJobs(): array
     {
+        return $this->mutations->run(function (): array {
+            $result = $this->processJobsCatalog();
+            $result["expired_candidates_removed"] = $this->collectExpiredCandidates();
+            return $result;
+        });
+    }
+    private function processJobsCatalog(): array
+    {
         $out = ["destroyed" => 0, "waiting" => 0, "failed" => 0];
         foreach ($this->db->all("SELECT * FROM jobs WHERE status IN ('pending','running')") as $j) {
             $lock = $this->fileLock((int) $j["file_id"], LOCK_EX | LOCK_NB);
@@ -895,6 +1020,74 @@ final class ShareStore
         }
         return $out;
     }
+    private function assertNameFree(string $name, ?int $except = null): void
+    {
+        $owner = $this->db->one(
+            "SELECT id FROM files WHERE storage_name=? AND state NOT IN ('trashed','destroyed') AND id<>?",
+            [$name, $except ?? 0],
+        );
+        if ($owner) {
+            throw new ShareError(
+                "duplicate",
+                "同名文件记录仍占用此名称（包括缺失文件），请先处理该记录或改用其他名称",
+                409,
+            );
+        }
+    }
+    private function discardStage(string $stage): void
+    {
+        if (
+            !$this->db->one("SELECT 1 FROM file_mutations WHERE stage=?", [$stage]) &&
+            is_file($stage) &&
+            !is_link($stage)
+        ) {
+            unlink($stage);
+        }
+    }
+    private function publishStage(string $stage, string $name, string $actor): int
+    {
+        return $this->mutations->run(function () use ($stage, $name, $actor): int {
+            $this->assertNameFree($name);
+            $stat = stat($stage);
+            $hash = hash_file("sha256", $stage);
+            if (!$stat || $hash === false) {
+                throw new RuntimeException("Cannot inspect the staged file.");
+            }
+            $mime = mime_content_type($stage) ?: "application/octet-stream";
+            return $this->mutations->apply(
+                "publish",
+                null,
+                $stage,
+                $stage,
+                $this->filesDir . "/" . $name,
+                $hash,
+                function () use ($name, $stat, $hash, $mime, $actor): int {
+                    $this->assertNameFree($name);
+                    $id = $this->insertFile($name, $stat, $hash, $mime);
+                    $this->audit($actor, "upload", $id, ["filename" => $name]);
+                    return $id;
+                },
+            );
+        });
+    }
+    public function importFile(string $source, string $name, string $actor = "cli"): array
+    {
+        self::validName($name);
+        if (!is_file($source) || is_link($source) || !is_readable($source)) {
+            throw new RuntimeException("A readable regular source file is required.");
+        }
+        $stage = $this->filesDir . "/.import-" . bin2hex(random_bytes(12));
+        try {
+            // The original import source remains independent of the managed entity.
+            if (!copy($source, $stage)) {
+                throw new RuntimeException("Cannot stage import.");
+            }
+            chmod($stage, 0600);
+            return $this->file($this->publishStage($stage, $name, $actor));
+        } finally {
+            $this->discardStage($stage);
+        }
+    }
     public function upload(array $u, string $actor = "manager"): string
     {
         if (($u["error"] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
@@ -909,38 +1102,32 @@ final class ShareStore
         if (!is_uploaded_file($temp) || filesize($temp) > self::MAX_UPLOAD_BYTES) {
             throw new ShareError("upload", "无效的上传文件，或文件超过 45 MiB");
         }
-        $target = $this->filesDir . "/" . $name;
         $stage = $this->filesDir . "/.upload-" . bin2hex(random_bytes(12));
         if (!move_uploaded_file($temp, $stage)) {
             throw new RuntimeException("Upload staging failed");
         }
         try {
             chmod($stage, 0600);
-            if (file_exists($target) || is_link($target) || !@link($stage, $target)) {
-                throw new ShareError("duplicate", "已存在同名文件，请重命名后上传", 409);
-            }
+            $this->publishStage($stage, $name, $actor);
         } finally {
-            if (is_file($stage)) {
-                unlink($stage);
-            }
+            $this->discardStage($stage);
         }
-        $this->scan($actor);
-        $this->audit($actor, "upload", null, ["filename" => $name]);
         return $name;
     }
     public function trash(string|int $target, string $actor = "manager"): void
     {
-        $f = is_int($target) ? $this->file($target) : $this->resolve($target);
-        $lock = $this->fileLock($f["id"], LOCK_EX | LOCK_NB);
-        if (!$lock) {
-            throw new ShareError("inflight", "文件正在传输，请稍后再移入回收目录", 409);
-        }
-        try {
-            $this->db->transaction(function () use ($f, $actor) {
-                $current = $this->file($f["id"]);
+        $this->mutations->run(function () use ($target, $actor): void {
+            $f = is_int($target) ? $this->file($target) : $this->resolve($target);
+            $lock = $this->fileLock($f["id"], LOCK_EX | LOCK_NB);
+            if (!$lock) {
+                throw new ShareError("inflight", "文件正在传输，请稍后再移入回收目录", 409);
+            }
+            $stage = null;
+            try {
+                $f = $this->file($f["id"]);
                 if (
-                    in_array($current["state"], ["destroying", "destroyed", "trashed"], true) ||
-                    !$this->readable($current)
+                    in_array($f["state"], ["destroying", "destroyed", "trashed"], true) ||
+                    !$this->readable($f)
                 ) {
                     throw new ShareError("unavailable", "文件不可移入回收目录", 409);
                 }
@@ -966,62 +1153,120 @@ final class ShareStore
                 ) {
                     throw new RuntimeException("Cannot save recovery metadata");
                 }
-                if (!rename($f["path"], $dir . "/file")) {
-                    throw new RuntimeException("Cannot move entity");
+                $stage = $dir . "/file";
+                $this->mutations->snapshot($f["path"], $stage, $f["sha256"]);
+                $this->mutations->apply(
+                    "trash",
+                    $f["id"],
+                    $f["path"],
+                    $stage,
+                    $stage,
+                    $f["sha256"],
+                    function () use ($f, $key, $actor): int {
+                        $current = $this->file($f["id"]);
+                        if (
+                            in_array(
+                                $current["state"],
+                                ["destroying", "destroyed", "trashed"],
+                                true,
+                            ) ||
+                            !$this->readable($current)
+                        ) {
+                            throw new ShareError("conflict", "文件状态刚刚变更，请重试", 409);
+                        }
+                        $this->db->run(
+                            "UPDATE files SET state='trashed',trash_key=?,revocation_epoch=revocation_epoch+1,updated_at=? WHERE id=?",
+                            [$key, time(), $f["id"]],
+                        );
+                        $this->db->run(
+                            "UPDATE jobs SET status='cancelled' WHERE file_id=? AND status='pending'",
+                            [$f["id"]],
+                        );
+                        $this->audit($actor, "trash", $f["id"], ["records_retained" => true]);
+                        return $f["id"];
+                    },
+                );
+                $stage = null; // A committed trash packet is retained for restoration.
+            } finally {
+                if ($stage !== null) {
+                    $this->discardStage($stage);
                 }
-                $this->db->run(
-                    "UPDATE files SET state='trashed',trash_key=?,revocation_epoch=revocation_epoch+1,updated_at=? WHERE id=?",
-                    [$key, time(), $f["id"]],
-                );
-                $this->db->run(
-                    "UPDATE jobs SET status='cancelled' WHERE file_id=? AND status='pending'",
-                    [$f["id"]],
-                );
-                $this->audit($actor, "trash", $f["id"], [
-                    "records_retained" => true,
-                ]);
-            });
-        } finally {
-            fclose($lock);
-        }
+                fclose($lock);
+            }
+        });
     }
     public function restore(int $id, string $actor): void
     {
-        $f = $this->file($id);
-        if (
-            $f["state"] !== "trashed" ||
-            !preg_match('/^[0-9]{8}-[0-9]{6}-[a-f0-9]{16}$/D', (string) $f["trash_key"])
-        ) {
-            throw new ShareError("restore", "文件不在回收目录", 409);
-        }
-        $lock = $this->fileLock($id, LOCK_EX);
-        try {
-            $this->db->transaction(function () use ($f, $actor) {
+        $this->mutations->run(function () use ($id, $actor): void {
+            $lock = $this->fileLock($id, LOCK_EX);
+            $stage = null;
+            try {
+                $f = $this->file($id);
+                if (
+                    $f["state"] !== "trashed" ||
+                    !preg_match('/^[0-9]{8}-[0-9]{6}-[a-f0-9]{16}$/D', (string) $f["trash_key"])
+                ) {
+                    throw new ShareError("restore", "文件不在回收目录", 409);
+                }
+                $this->assertNameFree($f["storage_name"], $id);
                 $source = $this->storageDir . "/trash/" . $f["trash_key"] . "/file";
                 $target = $f["path"];
                 if (
                     file_exists($target) ||
                     is_link($target) ||
                     !is_file($source) ||
-                    is_link($source)
+                    is_link($source) ||
+                    realpath(dirname($source)) !== dirname($source)
                 ) {
                     throw new ShareError("restore", "同名文件已存在或恢复实体不可用", 409);
                 }
-                if (!rename($source, $target)) {
-                    throw new RuntimeException("Restore failed");
+                if (
+                    filesize($source) !== $f["bytes"] ||
+                    !hash_equals($f["sha256"], (string) hash_file("sha256", $source))
+                ) {
+                    throw new ShareError(
+                        "restore_integrity",
+                        "回收实体的内容校验不符，已保留原状，请先核对文件",
+                        409,
+                    );
                 }
-                $s = stat($target);
-                $this->db->run(
-                    "UPDATE files SET state='paused',trash_key=NULL,mtime=?,inode=?,policy_version=policy_version+1,updated_at=? WHERE id=?",
-                    [$s["mtime"], $s["ino"], time(), $f["id"]],
+                $stage = $this->filesDir . "/.restore-" . bin2hex(random_bytes(12));
+                $this->mutations->snapshot($source, $stage, $f["sha256"]);
+                $stat = stat($stage);
+                $this->mutations->apply(
+                    "restore",
+                    $id,
+                    $source,
+                    $stage,
+                    $target,
+                    $f["sha256"],
+                    function () use ($f, $stat, $actor): int {
+                        $current = $this->file($f["id"]);
+                        if (
+                            $current["state"] !== "trashed" ||
+                            $current["trash_key"] !== $f["trash_key"]
+                        ) {
+                            throw new ShareError("conflict", "文件状态刚刚变更，请重试", 409);
+                        }
+                        $this->assertNameFree($f["storage_name"], $f["id"]);
+                        $this->db->run(
+                            "UPDATE files SET state='paused',trash_key=NULL,mtime=?,inode=?,policy_version=policy_version+1,revocation_epoch=revocation_epoch+1,updated_at=? WHERE id=?",
+                            [$stat["mtime"], $stat["ino"], time(), $f["id"]],
+                        );
+                        $this->audit($actor, "restore", $f["id"], [
+                            "state" => "paused",
+                            "integrity_verified" => true,
+                        ]);
+                        return $f["id"];
+                    },
                 );
-                $this->audit($actor, "restore", $f["id"], [
-                    "state" => "paused",
-                ]);
-            });
-        } finally {
-            fclose($lock);
-        }
+            } finally {
+                if ($stage !== null) {
+                    $this->discardStage($stage);
+                }
+                fclose($lock);
+            }
+        });
     }
     public function audit(string $actor, string $action, ?int $id, array $detail = []): void
     {

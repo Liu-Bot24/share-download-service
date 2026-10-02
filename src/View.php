@@ -179,6 +179,12 @@ function render_admin(string $page,array $data): void
 }
 function render_public(string $page,array $data): void
 {
+    if($page==='files'){
+        $files=$data['files']??[];
+        $timezone=(string)($data['settings']['timezone']??'Asia/Shanghai');
+        require dirname(__DIR__).'/templates/public-files.php';
+        return;
+    }
     $manager=$data['manager']??[];$file=$data['file']??null;$error=(string)($data['error']??$manager['error']??'');$errorCode=(string)($data['error_code']??'');$title=match($page){'login'=>'管理登录','password'=>'输入分享密码',default=>'分享暂不可用'};
     require dirname(__DIR__).'/templates/public.php';
 }

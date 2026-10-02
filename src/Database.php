@@ -48,6 +48,8 @@ final class Database
              referrer TEXT NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, observed_bytes INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS sessions_file_expiry ON sessions(file_id,expires_at);
+            CREATE INDEX IF NOT EXISTS sessions_expiry_unclaimed ON sessions(expires_at) WHERE claimed_at IS NULL;
+            CREATE INDEX IF NOT EXISTS sessions_public_candidates_ip ON sessions(ip,expires_at) WHERE claimed_at IS NULL AND actor='public';
             CREATE TABLE IF NOT EXISTS events (
              id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id),
              file_id INTEGER NOT NULL REFERENCES files(id), version INTEGER NOT NULL, filename TEXT NOT NULL,
@@ -80,6 +82,13 @@ final class Database
              updated_at INTEGER NOT NULL, error TEXT
             );
             CREATE TABLE IF NOT EXISTS rate_limits (bucket TEXT PRIMARY KEY, attempts INTEGER NOT NULL, until_at INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS rate_limits_expiry ON rate_limits(until_at);
+            CREATE TABLE IF NOT EXISTS file_mutations (
+             id TEXT PRIMARY KEY, kind TEXT NOT NULL, file_id INTEGER, committed INTEGER NOT NULL DEFAULT 0,
+             files_dir TEXT NOT NULL, storage_dir TEXT NOT NULL, source TEXT NOT NULL, stage TEXT NOT NULL, target TEXT NOT NULL,
+             source_inode INTEGER NOT NULL, source_device INTEGER NOT NULL, stage_inode INTEGER NOT NULL, stage_device INTEGER NOT NULL,
+             sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
             SQL
             ,
         );

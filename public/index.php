@@ -120,7 +120,12 @@ try {
         exit();
     }
     if ($path === "/") {
-        redirect("/admin", 302);
+        method_only(["GET", "HEAD"]);
+        render_public("files", [
+            "files" => $store->publicFiles(),
+            "settings" => $store->settings(),
+        ]);
+        exit();
     }
     if (!str_starts_with($path, "/admin") && !str_starts_with($path, "/manage/")) {
         throw new ShareError("not_found", "页面不存在", 404);
@@ -373,7 +378,14 @@ try {
     $status = $e instanceof ShareError ? $e->httpStatus : 400;
     $reason = $e instanceof ShareError ? $e->reason : "invalid";
     http_response_code($status);
-    if ($store && str_starts_with($_SERVER["REQUEST_URI"] ?? "", "/d/") && $reason !== "password") {
+    if ($reason === "candidate_rate_limit") {
+        header("Retry-After: 60");
+    }
+    if (
+        $store &&
+        str_starts_with($_SERVER["REQUEST_URI"] ?? "", "/d/") &&
+        !in_array($reason, ["password", "candidate_rate_limit"], true)
+    ) {
         try {
             $store->attempt($f["id"] ?? null, request_context()["ip"], $reason, $status);
         } catch (Throwable) {

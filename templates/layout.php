@@ -43,8 +43,19 @@
     <?php sf_csrf($manager) ?><input type="hidden" name="MAX_FILE_SIZE" value="47185920">
     <label class="upload-dropzone" for="upload-file" data-dropzone><span class="upload-symbol"><?= sf_icon('upload') ?></span><strong data-upload-label>选择文件，或拖放到这里</strong><span data-upload-size>每次上传一个文件，最大 45 MiB</span><input id="upload-file" name="file" type="file" required data-file-input></label>
     <p class="form-hint">同名文件不会被覆盖。新文件默认开放分享，不设密码和下载额度。</p>
+    <section class="upload-progress" data-upload-progress hidden aria-labelledby="upload-status-title">
+      <div class="upload-progress-heading"><strong id="upload-status-title" data-upload-status>准备发送</strong><span data-upload-percent>0%</span></div>
+      <div class="upload-progress-track" role="progressbar" aria-label="文件发送进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-describedby="upload-progress-detail" data-upload-progressbar><span data-upload-progress-fill></span></div>
+      <p id="upload-progress-detail" data-upload-detail aria-live="polite">进度来自浏览器实际发送量；发送完成后还需等待服务器保存。</p>
+    </section>
     <div class="inline-error" data-upload-error role="alert" hidden></div>
-    <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" type="submit" data-busy-label="上传中…"><?= sf_icon('upload') ?>上传文件</button></div>
+    <a class="upload-check-link text-link" data-upload-check href="/admin/files" hidden>先检查文件列表<?= sf_icon('arrow') ?></a>
+    <div class="upload-cancel-confirmation" data-upload-confirm-close hidden role="group" aria-labelledby="upload-close-title">
+      <strong id="upload-close-title">要取消正在进行的上传吗？</strong>
+      <p>取消会中断当前连接，但无法撤回服务器可能已保存的文件。再次上传前请检查文件列表。</p>
+      <div><button class="button secondary" type="button" data-upload-keep>继续上传</button><button class="button danger" type="button" data-upload-abort-close>取消上传并关闭</button></div>
+    </div>
+    <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog data-upload-close>取消</button><button class="button ghost upload-abort-button" type="button" data-upload-abort hidden>取消上传</button><button class="button primary" type="submit" data-busy-label="正在发送…" data-upload-submit><?= sf_icon('upload') ?>上传文件</button></div>
   </form>
 </dialog>
 <dialog class="detail-drawer" id="detail-drawer" aria-labelledby="drawer-title"><div class="drawer-topbar"><h2 id="drawer-title">文件详情</h2><div><a class="icon-button" data-drawer-full href="/admin/files" aria-label="在完整页面中查看"><?= sf_icon('external') ?></a><button class="icon-button" type="button" data-close-dialog aria-label="关闭文件详情"><?= sf_icon('close') ?></button></div></div><div data-drawer-body></div></dialog>

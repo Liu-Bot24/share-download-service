@@ -12,24 +12,7 @@ try {
         throw new RuntimeException("A readable regular source file is required.");
     }
     $store = share_store();
-    $target = $store->filesDir . "/" . $name;
-    $stage = $store->filesDir . "/.import-" . bin2hex(random_bytes(8));
-    if (!copy($source, $stage)) {
-        throw new RuntimeException("Cannot stage import.");
-    }
-    try {
-        chmod($stage, 0600);
-        if (file_exists($target) || is_link($target) || !link($stage, $target)) {
-            throw new RuntimeException("The destination exists; imports never overwrite files.");
-        }
-    } finally {
-        if (is_file($stage)) {
-            unlink($stage);
-        }
-    }
-    $store->scan("cli");
-    $rows = $store->db->all("SELECT * FROM files WHERE storage_name=? ORDER BY id DESC", [$name]);
-    $f = $store->file((int) $rows[0]["id"]);
+    $f = $store->importFile($source, $name);
     echo json_encode(
         [
             "id" => $f["id"],
