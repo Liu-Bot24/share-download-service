@@ -89,6 +89,7 @@ The installer discovers the current download only from the official DB-IP page, 
 ```sh
 composer install --no-dev --no-scripts
 php tests/run.php
+python3 tests/backup_test.py        # Isolated CLI backup destination and snapshot checks
 python3 tests/http_test.py          # Starts an isolated PHP fixture; requires php on PATH
 npm ci && npx playwright install chromium
 node tests/browser.mjs             # Isolated desktop/mobile screenshots and interaction suite

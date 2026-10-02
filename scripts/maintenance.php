@@ -19,8 +19,55 @@ try {
         }
     } elseif ($command === "backup") {
         $target = $argv[2] ?? "";
-        if ($target === "" || file_exists($target)) {
-            throw new RuntimeException("Provide a new backup filename outside the web root.");
+        if (
+            $target === "" ||
+            str_contains($target, "\0") ||
+            str_ends_with($target, DIRECTORY_SEPARATOR) ||
+            file_exists($target) ||
+            is_link($target)
+        ) {
+            throw new RuntimeException(
+                "Provide a new backup filename in an existing private directory.",
+            );
+        }
+        $parent = realpath(dirname($target));
+        if ($parent === false || !is_dir($parent)) {
+            throw new RuntimeException("The backup parent directory must already exist.");
+        }
+        $publicRoots = [];
+        foreach ([__DIR__ . "/../public", $store->filesDir] as $directory) {
+            $root = realpath($directory);
+            if ($root === false || !is_dir($root)) {
+                throw new RuntimeException("Cannot verify the public directory boundaries.");
+            }
+            $publicRoots[] = $root;
+        }
+        // Resolve all supplied ancestors, including aliases and '..'. A symlink beneath
+        // public/ can expose its private target too, so check more than the final realpath.
+        for ($ancestor = dirname($target); ; $ancestor = dirname($ancestor)) {
+            $resolved = realpath($ancestor);
+            foreach ($publicRoots as $root) {
+                if (
+                    $resolved === $root ||
+                    ($resolved !== false &&
+                        str_starts_with(
+                            $resolved,
+                            rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR,
+                        ))
+                ) {
+                    throw new RuntimeException(
+                        "Backups must stay outside the document root and shared-files directory.",
+                    );
+                }
+            }
+            if (dirname($ancestor) === $ancestor) {
+                break;
+            }
+        }
+        // Use the resolved absolute destination for SQLite, never the unchecked input path.
+        $target = rtrim($parent, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . basename($target);
+        if (file_exists($target) || is_link($target)) {
+            throw new RuntimeException("The backup destination already exists.");
         }
         // SQLite online VACUUM INTO yields a consistent snapshot, not an unsafe live file copy.
         $store->db->pdo->exec("VACUUM INTO " . $store->db->pdo->quote($target));

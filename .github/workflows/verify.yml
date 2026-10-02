@@ -27,6 +27,8 @@ jobs:
         run: |
           find src public scripts templates tests -name '*.php' -exec php -l {} \;
           php tests/run.php
+      - name: Private backup destination regressions
+        run: python3 tests/backup_test.py
       - name: Live isolated HTTP regressions
         run: python3 tests/http_test.py
       - name: Install pinned browser test runtime
