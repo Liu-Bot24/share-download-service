@@ -55,7 +55,10 @@ def main():
         env["SHARE_GATE_META"] = str(meta)
         with (private / "server.log").open("w+") as log:
             server = subprocess.Popen(
-                [PHP, "-S", "127.0.0.1:" + str(port), "-t", "public", "scripts/dev-router.php"],
+                # Exercise the application's 45 MiB bound independently of the CI
+                # image's default multipart limits. This affects only this fixture.
+                [PHP, "-d", "upload_max_filesize=50M", "-d", "post_max_size=52M",
+                 "-S", "127.0.0.1:" + str(port), "-t", "public", "scripts/dev-router.php"],
                 cwd=ROOT, env=env, stdout=log, stderr=log, start_new_session=True,
             )
             try:
