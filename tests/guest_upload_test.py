@@ -144,6 +144,27 @@ def main():
             db.execute('INSERT OR REPLACE INTO rate_limits VALUES(?,?,?)',('guest:global',30,int(time.time())+60));db.commit()
             check(upload(route)[0]==429,'aggregate upload rate limit rejects requests')
             check(not db.execute("SELECT 1 FROM rate_limits WHERE bucket LIKE 'guest:ip:%'").fetchone(),'later-bucket rejection rolls back earlier rate reservations')
+            for constraint in ['files','bytes','ip-rate','global-rate']:
+                route=open_window();before=db.execute('SELECT COUNT(*) FROM files').fetchone()[0]
+                payload=b'last available guest upload slot'
+                if constraint=='files':db.execute('UPDATE guest_upload_window SET received_count=99')
+                elif constraint=='bytes':db.execute('UPDATE guest_upload_window SET received_bytes=?',(1024**3-len(payload),))
+                else:
+                    key='guest:global' if constraint=='global-rate' else 'guest:ip:'+hashlib.sha256(b'127.0.0.1').hexdigest()
+                    db.execute('INSERT OR REPLACE INTO rate_limits VALUES(?,?,?)',(key,29 if constraint=='global-rate' else 9,int(time.time())+60))
+                db.commit()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                    results=list(pool.map(lambda _: upload(route,'contended.txt',payload),range(8)))
+                rejected=429 if 'rate' in constraint else 409
+                check(sum(r[0]==201 for r in results)==1 and sum(r[0]==rejected for r in results)==7,constraint+' last slot admits exactly one of eight concurrent uploads')
+                check(db.execute('SELECT COUNT(*) FROM files').fetchone()[0]==before+1 and not list((tmp/'files').glob('.upload-*')) and db.execute('SELECT COUNT(*) FROM file_mutations').fetchone()[0]==0,constraint+' contention leaves one complete private file and no abandoned publication')
+                window=db.execute('SELECT received_count,received_bytes FROM guest_upload_window').fetchone()
+                check(window['received_count']==(100 if constraint=='files' else 1) and window['received_bytes']==(1024**3 if constraint=='bytes' else len(payload)),constraint+' final window accounting matches exactly the winning file')
+            route=open_window()
+            for name in ['文件'*39+'.txt','name.'+'x'*100]:
+                status,_,body=upload(route,name,b'long name data');receipt=json.loads(body)
+                check(status==201 and len(receipt['name'].encode())<=240 and (tmp/'files'/receipt['name']).read_bytes()==b'long name data','long UTF-8 or extension input safely preserves bytes under a valid inbox name')
+            check(upload(route,'文件'*65+'.txt')[0]==400,'filenames beyond the existing 240-byte bound remain rejected')
             check((tmp/'files'/received_name).is_file(),'closing and reopening windows never removes already received files')
             check(all((tmp/'files'/n).read_bytes()==b'0123456789' for n in names),'all pre-existing entity bytes remain unchanged')
             check(db.execute('PRAGMA integrity_check').fetchone()[0]=='ok','database remains intact after all permission and failure checks')

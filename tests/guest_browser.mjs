@@ -33,7 +33,7 @@ try{
  const visitor=await browser.newContext({viewport:{width:1440,height:1000},locale:'zh-CN',acceptDownloads:true});const guest=await visitor.newPage();guest.on('pageerror',e=>errors.push(e.message));
  await guest.goto(base+'/');check(await guest.locator(`[data-public-file="${target.public_id}"]`).count()===0,'public visitor sees the switched-off file disappear');
  await page.getByRole('switch',{name:'在首页显示 '+target.name,exact:true}).click();await page.waitForLoadState();await guest.reload();check(await guest.locator(`[data-public-file="${target.public_id}"]`).count()===1,'explicitly switching on restores the homepage row');
- await page.goto(base+'/admin/receive');check(await page.getByRole('heading',{name:'收件入口已关闭'}).isVisible(),'inbox starts with uploads closed');
+ await page.goto(base+'/admin/receive');check(await page.getByRole('heading',{name:'收件窗口已关闭'}).isVisible(),'inbox starts with uploads closed');
  await page.locator('[name=minutes]').fill('10');await page.getByRole('button',{name:'开启访客上传',exact:true}).click();await page.waitForLoadState();
  const link=await page.locator('#receive-link').inputValue();check(link.startsWith(base+'/upload/'),'administrator receives a canonical-origin upload link');
  await page.screenshot({path:path.join(output,'desktop-inbox.png'),fullPage:true});
@@ -54,7 +54,7 @@ try{
  const curl=spawnSync('curl',['--silent','--show-error','--fail-with-body','-H','Accept: application/json','-F',`file=@${agentFile}`,link],{encoding:'utf8'});check(curl.status===0 && JSON.parse(curl.stdout).ok===true,'documented curl multipart upload works with no cookies or login');
  const mobile=await browser.newContext({viewport:{width:390,height:844},locale:'zh-CN'});const phone=await mobile.newPage();phone.on('pageerror',e=>errors.push(e.message));await phone.goto(link);
  check(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'guest form and Agent command fit mobile width');await phone.screenshot({path:path.join(output,'mobile-guest.png'),fullPage:true});
- await page.reload();await page.getByRole('button',{name:'立即关闭',exact:true}).click();await page.waitForLoadState();check(await page.getByRole('heading',{name:'收件入口已关闭'}).isVisible(),'administrator can close the active window manually');
+ await page.reload();await page.getByRole('button',{name:'立即关闭',exact:true}).click();await page.waitForLoadState();check(await page.getByRole('heading',{name:'收件窗口已关闭'}).isVisible(),'administrator can close the active window manually');
  await guest.locator('[data-window-label]').filter({hasText:'收件窗口已关闭'}).waitFor({timeout:10000});check(await guest.getByRole('button',{name:'上传给接收方'}).isDisabled(),'already-open guest page notices closure and disables new uploads');
  const closed=spawnSync('curl',['--silent','--show-error','-H','Accept: application/json','-F',`file=@${agentFile}`,'-w','\n%{http_code}',link],{encoding:'utf8'});check(closed.stdout.trim().endsWith('410') && JSON.parse(closed.stdout.slice(0,closed.stdout.lastIndexOf('\n'))).code==='upload_closed','Agent receives 410 JSON after manual closure');
  await page.locator('[name=minutes]').fill('1');await page.getByRole('button',{name:'开启访客上传',exact:true}).click();await page.waitForLoadState();const replacement=await page.locator('#receive-link').inputValue();check(replacement!==link,'reopening rotates the capability link');
