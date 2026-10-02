@@ -28,6 +28,14 @@ jobs:
           find src public scripts templates tests -name '*.php' -exec php -l {} \;
           php tests/run.php
           php tests/mutations.php
+      - name: Atomic administrator and file-password throttling
+        run: python3 tests/auth_rate_test.py
+      - name: Preserved 3ca48d5 independent recovery migration and HTTP gates
+        run: |
+          python3 tests/verify_preserved_gate.py
+          php tests/merge_gate_recovery.php
+          php tests/merge_gate_migration.php
+          python3 tests/merge_gate_fixture.py http
       - name: Private backup destination regressions
         run: python3 tests/backup_test.py
       - name: Live isolated HTTP regressions
@@ -41,11 +49,15 @@ jobs:
         run: python3 tests/nginx_test.py
       - name: Desktop and phone browser regressions
         run: node tests/browser.mjs
+      - name: Preserved independent browser checks with explicit XHR compatibility
+        run: python3 tests/merge_gate_fixture.py browser-compat
       - name: Save synthetic visual evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: share-ui-evidence
-          path: artifacts/browser/
+          path: |
+            artifacts/browser/
+            artifacts/gate/
           retention-days: 7
           if-no-files-found: ignore

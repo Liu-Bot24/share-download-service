@@ -571,9 +571,13 @@ final class ShareStore
                     "unlock:ip:" . hash("sha256", $context["ip"]),
                     "unlock:global",
                 ];
-                $this->rateCheck($buckets, [8, 40, 500]);
-                if ($password === null || !password_verify($password, $f["password_hash"])) {
-                    $this->rateFailure($buckets);
+                $valid = $this->verifyCredentials(
+                    $buckets,
+                    [8, 40, 500],
+                    fn(): bool => $password !== null &&
+                        password_verify($password, $f["password_hash"]),
+                );
+                if (!$valid) {
                     $this->attempt($id, $context["ip"], "password", 401);
                     throw new ShareError("password", "文件密码不正确", 401);
                 }
@@ -1288,28 +1292,42 @@ final class ShareStore
             [$id, time(), $ip, $reason, $status],
         );
     }
-    public function rateCheck(array $keys, array $limits): void
+    /** Reserve before expensive verification; failures and interrupted workers keep their slot. */
+    public function verifyCredentials(array $keys, array $limits, callable $verify): bool
     {
-        foreach ($keys as $i => $k) {
-            $r = $this->db->one("SELECT * FROM rate_limits WHERE bucket=?", [$k]);
-            if ($r && $r["until_at"] > time() && $r["attempts"] >= $limits[$i]) {
-                throw new ShareError("rate_limit", "尝试次数过多，请 15 分钟后重试", 429);
-            }
-        }
-    }
-    public function rateFailure(array $keys): void
-    {
-        $this->db->transaction(function () use ($keys) {
-            foreach ($keys as $k) {
+        $windows = $this->db->transaction(function () use ($keys, $limits): array {
+            $now = time();
+            $windows = [];
+            foreach ($keys as $i => $k) {
                 $r = $this->db->one("SELECT * FROM rate_limits WHERE bucket=?", [$k]);
-                $count = $r && $r["until_at"] > time() ? (int) $r["attempts"] + 1 : 1;
-                $until = $r && $r["until_at"] > time() ? (int) $r["until_at"] : time() + 900;
+                $live = $r && (int) $r["until_at"] > $now;
+                if ($live && (int) $r["attempts"] >= $limits[$i]) {
+                    throw new ShareError("rate_limit", "尝试次数过多，请 15 分钟后重试", 429);
+                }
+                $count = $live ? (int) $r["attempts"] + 1 : 1;
+                $until = $live ? (int) $r["until_at"] : $now + 900;
                 $this->db->run(
                     "INSERT INTO rate_limits(bucket,attempts,until_at) VALUES(?,?,?) ON CONFLICT(bucket) DO UPDATE SET attempts=excluded.attempts,until_at=excluded.until_at",
                     [$k, $count, $until],
                 );
+                $windows[$k] = $until;
+            }
+            return $windows;
+        });
+        // No SQLite write lock is held while hashing. Exceptions deliberately retain the slot.
+        if ($verify() !== true) {
+            return false;
+        }
+        $this->db->transaction(function () use ($windows): void {
+            foreach ($windows as $k => $until) {
+                // A slow successful verifier must not subtract from a replacement window.
+                $this->db->run(
+                    "UPDATE rate_limits SET attempts=attempts-1 WHERE bucket=? AND until_at=? AND attempts>0",
+                    [$k, $until],
+                );
             }
         });
+        return true;
     }
     public static function validName(string $n): void
     {

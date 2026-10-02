@@ -41,6 +41,8 @@ One public download means **one session authorized to start**, not proof that th
 
 Single byte ranges are supported, including suffix/open ranges and If-Range. Multipart ranges are explicitly rejected with 416 before quota claim; use sequential or parallel single-range requests on the same token. Each token allows at most 3 concurrent requests, 128 total requests and bounded observed retransmission bytes. These are abuse bounds, not user identity guarantees. Forwarding a valid token or the downloaded file cannot be prevented by a file password.
 
+Credential attempts are reserved atomically before password verification. Over a 15-minute window, administrator limits are 8 per IP and 100 globally; file-password limits are 8 per file/IP, 40 per IP and 500 globally. In-flight checks occupy slots too, so concurrent guesses cannot bypass these limits. A successful check refunds only its own slot; failures, verification exceptions and interrupted workers retain theirs until expiry. Password hashing holds no SQLite write lock. These limits do not apply to existing download tokens or password-free links.
+
 An administrator's dedicated **后台下载** button is a CSRF-protected POST. It works for paused, password-protected or quota-exhausted entities, but does not change public count, last-public time or analytics. Visiting a public link as an administrator still follows and counts against public rules. Logout invalidates administrator tickets.
 
 All response bodies use the PHP streaming driver in this release. It holds an advisory shared entity lock, reports only server-observed transmission and allows the destruction worker to prove that no PHP sender is active. **Do not replace it with X-Accel-Redirect** without adding a reliable completion/lease collector and revalidating in-flight safety. This is a deliberate safety-first change from the implementation specification's suggested acceleration option. Tune PHP-FPM capacity and timeouts for actual file sizes and concurrency before production.
@@ -91,6 +93,7 @@ The installer discovers the current download only from the official DB-IP page, 
 composer install --no-dev --no-scripts
 php tests/run.php
 php tests/mutations.php             # Requires pcntl + posix: concurrency, fault injection and crash recovery
+python3 tests/auth_rate_test.py     # Real PHP process races, credential windows and database fault checks
 python3 tests/backup_test.py        # Isolated CLI backup destination and snapshot checks
 python3 tests/http_test.py          # Starts an isolated PHP fixture; requires php on PATH
 python3 tests/nginx_test.py         # Isolated Nginx routing/log fixture; requires nginx on PATH
@@ -100,3 +103,5 @@ find src public scripts templates tests -name '*.php' -exec php -l {} \;
 ```
 
 The tests never use production paths or credentials and destruct only randomly created temporary fixture files. The test fixture is not included in application output. The HTTP suite covers direct links, passwords, HEAD/Range/304, CSRF, authentication, Host rejection, upload, trash/restore and admin/public metric separation. Browser checks cover desktop/mobile, drawer history/cancel, navigation, keyboard and form feedback.
+
+The independent review tests from commit `3ca48d5ef789929c7a60c1ec4b18111cdc27ee17` are retained separately, including the original browser source. CI verifies their SHA256 values before running recovery, migration and HTTP checks. `python3 tests/merge_gate_fixture.py browser-compat` runs the independent browser checks with an explicit two-expression adaptation for the current inline XHR duplicate-upload error; the original test expects navigation to `/admin/upload`. The runner writes the adaptation diff to `artifacts/gate/`. An adapted browser pass does not count as an unchanged-original browser pass.

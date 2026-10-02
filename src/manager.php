@@ -45,17 +45,18 @@ function manager_login(ShareStore $store, string $user, string $pass): void
 {
     $ip = request_context()["ip"];
     $keys = ["admin:" . hash("sha256", $ip), "admin:global"];
-    $store->rateCheck($keys, [8, 100]);
     $path = $store->storageDir . "/manager.json";
     if (!is_readable($path)) {
         throw new ShareError("setup", "管理账号尚未配置，请先运行账号初始化命令", 503);
     }
     $c = json_decode((string) file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
-    $valid =
-        password_verify($pass, (string) ($c["password_hash"] ?? "")) &&
-        hash_equals((string) ($c["username"] ?? ""), $user);
+    $valid = $store->verifyCredentials(
+        $keys,
+        [8, 100],
+        fn(): bool => password_verify($pass, (string) ($c["password_hash"] ?? "")) &&
+            hash_equals((string) ($c["username"] ?? ""), $user),
+    );
     if (!$valid) {
-        $store->rateFailure($keys);
         throw new ShareError("login", "账号或密码不正确", 401);
     }
     session_start();
