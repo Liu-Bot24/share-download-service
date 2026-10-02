@@ -9,7 +9,7 @@ if($search!=='')$files=array_values(array_filter($files,static fn($item)=>stripo
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><meta name="referrer" content="no-referrer">
 <title>共享文件 · Share Files</title>
-<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261002"><script src="/assets/app.js?v=20261002" defer></script>
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261002-guest"><script src="/assets/app.js?v=20261002-guest" defer></script>
 </head>
 <body class="public-catalogue">
 <a class="skip-link" href="#public-content">跳转到共享文件</a>
@@ -19,7 +19,7 @@ if($search!=='')$files=array_values(array_filter($files,static fn($item)=>stripo
   <section class="panel catalogue-panel" aria-labelledby="catalogue-list-title">
     <div class="catalogue-toolbar"><h2 id="catalogue-list-title">文件列表<?php if($search!==''): ?><span class="small-badge"><?= sf_number(count($files)) ?> 个匹配</span><?php endif ?></h2><form method="get" action="/" role="search" class="catalogue-search"><label class="search-input"><?= sf_icon('search') ?><span class="sr-only">搜索共享文件</span><input id="public-search" type="search" name="q" value="<?= h($search) ?>" maxlength="255" placeholder="搜索文件名…" autocomplete="off"></label><button class="button secondary" type="submit">搜索</button></form></div>
     <?php if($search!==''): ?><div class="active-filters"><span>搜索：<?= h($search) ?></span><a href="/">显示全部文件</a></div><?php endif ?>
-    <?php if(!$files): sf_empty($search!==''?'search':'folder',$search!==''?'没有匹配的文件':'暂无可下载的文件',$search!==''?'试试其他文件名，或返回查看全部共享文件。':'文件开放分享后会出现在这里。你也可以向分享者索取链接。',$search!==''?'/':null,$search!==''?'显示全部文件':null); else: ?>
+    <?php if(!$files): sf_empty($search!==''?'search':'folder',$search!==''?'没有匹配的文件':'暂无可下载的文件',$search!==''?'试试其他文件名，或返回查看全部共享文件。':'目前没有在首页展示的文件。你可以向分享者索取具体文件的链接。',$search!==''?'/':null,$search!==''?'显示全部文件':null); else: ?>
     <div class="table-wrap"><table class="data-table public-files-table"><thead><tr><th>文件名称 / 大小</th><th>SHA256 校验值</th><th class="align-right">公开下载</th><th>最近公开下载</th><th class="align-right">操作</th></tr></thead><tbody>
     <?php foreach($files as$item): $url=public_download_url($item);[$typeIcon,$typeColor,$typeLabel]=sf_file_type($item); ?>
       <tr data-public-file="<?= h($item['public_id']) ?>">

@@ -83,6 +83,11 @@ final class Database
             );
             CREATE TABLE IF NOT EXISTS rate_limits (bucket TEXT PRIMARY KEY, attempts INTEGER NOT NULL, until_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS rate_limits_expiry ON rate_limits(until_at);
+            CREATE TABLE IF NOT EXISTS guest_upload_window (
+             id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, opened_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL, closed_at INTEGER, received_count INTEGER NOT NULL DEFAULT 0,
+             received_bytes INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS file_mutations (
              id TEXT PRIMARY KEY, kind TEXT NOT NULL, file_id INTEGER, committed INTEGER NOT NULL DEFAULT 0,
              files_dir TEXT NOT NULL, storage_dir TEXT NOT NULL, source TEXT NOT NULL, stage TEXT NOT NULL, target TEXT NOT NULL,
@@ -92,6 +97,20 @@ final class Database
             SQL
             ,
         );
+        // Serialize additive upgrades: concurrent first requests must not race ALTER TABLE.
+        $this->transaction(function (): void {
+            $columns = array_column($this->all("PRAGMA table_info(files)"), "name");
+            if (!in_array("homepage_visible", $columns, true)) {
+                $this->pdo->exec(
+                    "ALTER TABLE files ADD COLUMN homepage_visible INTEGER NOT NULL DEFAULT 0 CHECK(homepage_visible IN (0,1))",
+                );
+            }
+            if (!in_array("upload_origin", $columns, true)) {
+                $this->pdo->exec(
+                    "ALTER TABLE files ADD COLUMN upload_origin TEXT NOT NULL DEFAULT 'administrator'",
+                );
+            }
+        });
         $this->run("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", [
             "timezone",
             "Asia/Shanghai",

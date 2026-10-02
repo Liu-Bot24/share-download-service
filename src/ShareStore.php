@@ -289,6 +289,9 @@ final class ShareStore
     {
         $where = [];
         $args = [];
+        if (($filters["origin"] ?? "") === "guest") {
+            $where[] = "upload_origin='guest'";
+        }
         if (($filters["q"] ?? "") !== "") {
             $where[] = "name LIKE ?";
             $args[] = "%" . $filters["q"] . "%";
@@ -327,6 +330,7 @@ final class ShareStore
         $out = [];
         foreach ($this->files(["state" => "active", "sort" => "name"]) as $file) {
             if (
+                !$file["homepage_visible"] ||
                 ($file["public_cap"] !== null && $file["public_count"] >= $file["public_cap"]) ||
                 !$this->readable($file)
             ) {
@@ -386,6 +390,7 @@ final class ShareStore
                 "created_at",
                 "updated_at",
                 "auto_destroy",
+                "homepage_visible",
                 "revocation_epoch",
                 "inode",
             ]
@@ -1048,9 +1053,25 @@ final class ShareStore
             unlink($stage);
         }
     }
-    private function publishStage(string $stage, string $name, string $actor): int
-    {
-        return $this->mutations->run(function () use ($stage, $name, $actor): int {
+    private function publishStage(
+        string $stage,
+        string $name,
+        string $actor,
+        ?callable $guestCommit = null,
+    ): int {
+        return $this->mutations->run(function () use ($stage, $name, $actor, $guestCommit): int {
+            if ($guestCommit !== null) {
+                // A unique inbox name preserves both submissions and every existing name/alias.
+                $extension = pathinfo($name, PATHINFO_EXTENSION);
+                $extension = strlen($extension) <= 24 && $extension !== "" ? "." . $extension : "";
+                $stem = $extension !== "" ? substr($name, 0, -strlen($extension)) : $name;
+                $name =
+                    mb_strcut($stem, 0, 175, "UTF-8") .
+                    "-访客-" .
+                    bin2hex(random_bytes(8)) .
+                    $extension;
+                self::validName($name);
+            }
             $this->assertNameFree($name);
             $stat = stat($stage);
             $hash = hash_file("sha256", $stage);
@@ -1068,9 +1089,23 @@ final class ShareStore
                 $stage,
                 $this->filesDir . "/" . $name,
                 $hash,
-                function () use ($name, $stat, $hash, $mime, $actor): int {
+                function () use ($name, $stat, $hash, $mime, $actor, $guestCommit): int {
                     $this->assertNameFree($name);
-                    $id = $this->insertFile($name, $stat, $hash, $mime);
+                    $id = $this->insertFile(
+                        $name,
+                        $stat,
+                        $hash,
+                        $mime,
+                        [],
+                        $guestCommit !== null ? "paused" : "active",
+                    );
+                    if ($guestCommit !== null) {
+                        $guestCommit($id, (int) $stat["size"]);
+                        $this->db->run(
+                            "UPDATE files SET upload_origin='guest',homepage_visible=0 WHERE id=?",
+                            [$id],
+                        );
+                    }
                     $this->audit($actor, "upload", $id, ["filename" => $name]);
                     return $id;
                 },
@@ -1095,8 +1130,11 @@ final class ShareStore
             $this->discardStage($stage);
         }
     }
-    public function upload(array $u, string $actor = "manager"): string
-    {
+    public function upload(
+        array $u,
+        string $actor = "manager",
+        ?callable $guestCommit = null,
+    ): string {
         if (($u["error"] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
             throw new ShareError("upload", "上传失败，请检查文件是否完整且不超过 45 MiB");
         }
@@ -1115,11 +1153,24 @@ final class ShareStore
         }
         try {
             chmod($stage, 0600);
-            $this->publishStage($stage, $name, $actor);
+            $id = $this->publishStage($stage, $name, $actor, $guestCommit);
+            $name = $this->file($id)["name"];
         } finally {
             $this->discardStage($stage);
         }
         return $name;
+    }
+    public function setHomepageVisibility(int $id, bool $visible, string $actor): void
+    {
+        $this->db->transaction(function () use ($id, $visible, $actor): void {
+            $this->file($id);
+            $this->db->run("UPDATE files SET homepage_visible=?,updated_at=? WHERE id=?", [
+                (int) $visible,
+                time(),
+                $id,
+            ]);
+            $this->audit($actor, "homepage_visibility", $id, ["visible" => $visible]);
+        });
     }
     public function trash(string|int $target, string $actor = "manager"): void
     {

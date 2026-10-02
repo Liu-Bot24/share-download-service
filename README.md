@@ -6,6 +6,8 @@ A small, private PHP file-sharing workspace for BaoTa/Nginx. Redesigned from the
 
 - Responsive Chinese overview, file workspace and detail drawer, session history, analytics and settings
 - Public visitor file catalog at `/`, including direct/password downloads and public file metadata; private administration remains under `/admin`
+- Per-file opt-in homepage visibility (off by default, including on upgrade). Hiding a homepage entry preserves its existing direct share link; pause the share to deny new downloads.
+- Administrator-controlled, timed guest uploads under `/admin/receive`: open for 1–1440 minutes, copy a fresh upload-only link, or close immediately. The visitor page supports browser upload and a domain-based curl command; expired/replaced links reject new publications.
 - Optional per-file password, SHA256 cached during indexing, immutable link aliases and version checks
 - Atomic SQLite quota claims, single-use counting per resumable session, proper GET/HEAD/conditional/single-Range behavior
 - Private administrator download tickets, independent from all public quotas and charts
@@ -36,6 +38,8 @@ For a pre-existing installation, keep the existing private `storage/manager.json
 `SHARE_BASE_URL` defaults to `https://share.playai.ren`. Requests with an unrecognized Host are rejected. Set its actual canonical HTTPS origin before using another domain. Do not derive public URLs from arbitrary incoming Host headers. Public assets and password pages load only same-origin resources.
 
 ## Download semantics
+
+Guest uploads keep the original 45 MiB per-file limit. They arrive as paused files hidden from the homepage; administrators can download them in the inbox and deliberately enable sharing later. Names receive a unique suffix so repeated submissions never overwrite existing content. Each window accepts up to 100 files / 1 GiB, with 10 requests per source IP and 30 total per minute. Expiry, manual close, link rotation and window capacity are rechecked inside the file-publication transaction, including uploads that started earlier. Requests with `Accept: application/json` receive a 201 receipt without a public download link; closed windows return 410. The web server may receive the request body before the application rejects a closed window; no file is accepted into the inbox after its authorization check fails.
 
 One public download means **one session authorized to start**, not proof that the visitor saved a file. The entrance creates a five-minute candidate and redirects transparently to a high-entropy bearer token. The first valid GET of its entity claims exactly one quota slot and event in a short `BEGIN IMMEDIATE` transaction. Active session lifetime defaults to 24 hours and is configurable from 300 seconds to 48 hours. HEAD, password errors, 304, 416, failed authorization and administrator tickets do not count. Range retries on the same final URL do not recount. Interrupted transfers are not refunded. A new entrance URL visit intentionally creates a new candidate; download managers must resume the final redirected URL to reuse the same session.
 
@@ -96,9 +100,11 @@ php tests/mutations.php             # Requires pcntl + posix: concurrency, fault
 python3 tests/auth_rate_test.py     # Real PHP process races, credential windows and database fault checks
 python3 tests/backup_test.py        # MIME fallback, backup boundaries, publication races and live snapshot checks
 python3 tests/http_test.py          # Starts an isolated PHP fixture; requires php on PATH
+python3 tests/guest_upload_test.py  # Discovery opt-in, timed inbox permissions, fault/concurrency checks
 python3 tests/nginx_test.py         # Isolated Nginx routing/log fixture; requires nginx on PATH
 npm ci && npx playwright install chromium
 node tests/browser.mjs             # Isolated desktop/mobile screenshots and interaction suite
+node tests/guest_browser.mjs        # Real guest UI, admin visibility switches, expiry and curl uploads
 find src public scripts templates tests -name '*.php' -exec php -l {} \;
 ```
 

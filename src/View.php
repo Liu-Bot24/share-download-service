@@ -172,13 +172,14 @@ function sf_events_table(array $events,string $timezone,bool $compact=false): vo
 function render_admin(string $page,array $data): void
 {
     $page=match($page){'index','dashboard'=>'overview','detail','file-detail'=>'file',default=>$page};
-    if(!in_array($page,['overview','files','file','downloads','analytics','settings'],true))$page='overview';
+    if(!in_array($page,['overview','files','file','downloads','analytics','settings','receive'],true))$page='overview';
     $manager=$data['manager']??[];$settings=$data['settings']??[];$timezone=(string)($settings['timezone']??'Asia/Shanghai');$analytics=$data['analytics']??[];$summary=$analytics['summary']??[];$files=$data['files']??[];$file=$data['file']??null;$events=$data['events']??[];$pagination=$data['pagination']??['page'=>1,'pages'=>1,'total'=>count($page==='files'?$files:$events),'per_page'=>25];$storage=$data['storage']??[];
-    $titles=['overview'=>'概览','files'=>'文件管理','file'=>$file['name']??'文件详情','downloads'=>'下载记录','analytics'=>'数据分析','settings'=>'设置'];$title=$titles[$page];
+    $titles=['overview'=>'概览','files'=>'文件管理','file'=>$file['name']??'文件详情','downloads'=>'下载记录','analytics'=>'数据分析','settings'=>'设置','receive'=>'访客收件'];$title=$titles[$page];
     require dirname(__DIR__).'/templates/layout.php';
 }
 function render_public(string $page,array $data): void
 {
+    if($page==='guest-upload'){require dirname(__DIR__).'/templates/guest-upload.php';return;}
     if($page==='files'){
         $files=$data['files']??[];
         $timezone=(string)($data['settings']['timezone']??'Asia/Shanghai');
