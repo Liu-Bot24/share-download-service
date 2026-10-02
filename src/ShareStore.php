@@ -1057,7 +1057,10 @@ final class ShareStore
             if (!$stat || $hash === false) {
                 throw new RuntimeException("Cannot inspect the staged file.");
             }
-            $mime = mime_content_type($stage) ?: "application/octet-stream";
+            $mime = function_exists("mime_content_type")
+                ? (mime_content_type($stage) ?:
+                "application/octet-stream")
+                : "application/octet-stream";
             return $this->mutations->apply(
                 "publish",
                 null,

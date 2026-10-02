@@ -16,7 +16,7 @@ A small, private PHP file-sharing workspace for BaoTa/Nginx. Redesigned from the
 
 ## Runtime and local development
 
-PHP 8.2+ with PDO SQLite, session, fileinfo and mbstring. Run `composer install --no-dev --no-scripts` to install the locked pure-PHP MMDB reader. Tests also require `pcntl` on Linux for the real 20-process race test. SQLite must be on a **local filesystem**. This version deliberately uses **DELETE journaling and FULL synchronous mode**, not WAL; the WAL-reset version caveat does not apply. Use a supported, patched PHP/SQLite release.
+PHP 8.2+ with PDO SQLite, session and mbstring. Fileinfo is optional: if its MIME detector is unavailable, uploads and imports use `application/octet-stream` and still download as attachments. The backup command additionally requires the SQLite3 extension with `SQLite3::backup`; it uses the online backup API and does not require SQLite's newer `VACUUM INTO` syntax. Run `composer install --no-dev --no-scripts` to install the locked pure-PHP MMDB reader. Tests also require `pcntl` on Linux for the real 20-process race test. SQLite must be on a **local filesystem**. This version deliberately uses **DELETE journaling and FULL synchronous mode**, not WAL; the WAL-reset version caveat does not apply. Use a supported, patched PHP/SQLite release.
 
 The only public document root is `public/`. Both `files/` and `storage/` must stay outside it. The web/PHP user must have private read/write access to them (directories 0700, or carefully scoped 0770 if required by BaoTa). Never put real files, manager credentials, session files, databases or GeoIP data in git.
 
@@ -94,7 +94,7 @@ composer install --no-dev --no-scripts
 php tests/run.php
 php tests/mutations.php             # Requires pcntl + posix: concurrency, fault injection and crash recovery
 python3 tests/auth_rate_test.py     # Real PHP process races, credential windows and database fault checks
-python3 tests/backup_test.py        # Isolated CLI backup destination and snapshot checks
+python3 tests/backup_test.py        # MIME fallback, backup boundaries, publication races and live snapshot checks
 python3 tests/http_test.py          # Starts an isolated PHP fixture; requires php on PATH
 python3 tests/nginx_test.py         # Isolated Nginx routing/log fixture; requires nginx on PATH
 npm ci && npx playwright install chromium

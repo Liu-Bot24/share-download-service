@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Exercise the real backup CLI against isolated, synthetic filesystem fixtures."""
 import os
+import concurrent.futures
+import hashlib
+import json
 import pathlib
 import shutil
 import sqlite3
 import stat
 import subprocess
 import tempfile
+import threading
+import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -51,6 +56,36 @@ def main():
         source = storage / "share.sqlite"
         with sqlite3.connect(source) as database:
             database.execute("INSERT INTO settings VALUES (?, ?)", ("backup_fixture", "private marker"))
+
+        # Fileinfo may be absent in BaoTa. Exercise the actual import publication path.
+        mime_source = tmp / "mime-input.php"
+        mime_bytes = b'<?php echo "synthetic attachment"; ?>'
+        mime_source.write_bytes(mime_bytes)
+        # Add a restriction to the actual runtime configuration; never remove its
+        # existing disabled functions while constructing the compatibility fixture.
+        disabled_probe = subprocess.run(
+            [PHP, "-r", "echo ini_get('disable_functions');"],
+            cwd=app, env=env, capture_output=True, text=True, timeout=20,
+        )
+        check(disabled_probe.returncode == 0, "MIME compatibility fixture reads the existing PHP restrictions")
+        disabled_functions = [name.strip() for name in disabled_probe.stdout.split(",") if name.strip()]
+        if "mime_content_type" not in {name.lower() for name in disabled_functions}:
+            disabled_functions.append("mime_content_type")
+        imported = subprocess.run(
+            [PHP, "-d", "disable_functions=" + ",".join(disabled_functions), "-r",
+             "require $argv[1]; $s=new ShareStore($argv[2],$argv[3]); "
+             "$f=$s->importFile($argv[4],'mime-fallback.php'); "
+             "echo json_encode(['mime'=>$f['mime_type'],'sha256'=>$f['sha256']]);",
+             str(app / "src/bootstrap.php"), str(files), str(storage / "stats.json"), str(mime_source)],
+            cwd=app, env=env, capture_output=True, text=True, timeout=20,
+        )
+        imported_data = json.loads(imported.stdout) if imported.returncode == 0 else {}
+        check(
+            imported.returncode == 0 and imported_data.get("mime") == "application/octet-stream"
+            and imported_data.get("sha256") == hashlib.sha256(mime_bytes).hexdigest()
+            and (files / "mime-fallback.php").read_bytes() == mime_bytes,
+            "missing MIME detector preserves imported attachment bytes and uses the safe fallback: " + imported.stderr.strip(),
+        )
 
         def rejected(target, output, label, environment=None):
             result = command("backup", str(target), environment=environment)
@@ -142,12 +177,13 @@ def main():
             with sqlite3.connect(output) as snapshot:
                 integrity = snapshot.execute("PRAGMA integrity_check").fetchone()[0]
                 marker = snapshot.execute("SELECT value FROM settings WHERE key='backup_fixture'").fetchone()
-                filename = snapshot.execute("SELECT name FROM files").fetchone()
+                filename = snapshot.execute("SELECT name FROM files WHERE name='fixture.txt'").fetchone()
             check(
                 integrity == "ok" and marker == ("private marker",) and filename == ("fixture.txt",)
                 and stat.S_IMODE(output.stat().st_mode) == 0o600,
                 label + " retains an intact private 0600 snapshot",
             )
+            check(not list(output.parent.glob(".share-backup-*")), label + " removes its private staging file")
 
         saved(private / "valid.sqlite", private / "valid.sqlite", "absolute private backup")
         saved("../private-backups/relative.sqlite", private / "relative.sqlite", "relative private backup")
@@ -160,6 +196,61 @@ def main():
         for sibling in [app / "document-root-backups", app / "public-backups", tmp / "shared-files-backups"]:
             sibling.mkdir()
             saved(sibling / "valid.sqlite", sibling / "valid.sqlite", "separator-aware sibling: " + sibling.name)
+
+        race_target = private / "race.sqlite"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: command("backup", str(race_target)), range(2)))
+        check(sorted(result.returncode for result in results) == [0, 1],
+              "two backup processes competing for one target have exactly one publisher")
+        with sqlite3.connect(race_target) as snapshot:
+            check(snapshot.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                  and snapshot.execute("SELECT value FROM settings WHERE key='backup_fixture'").fetchone() == ("private marker",),
+                  "competing backups never overwrite or degrade the winning snapshot")
+        check(not list(private.glob(".share-backup-*")), "competing backup processes leave no staged snapshot")
+
+        # Each writer commits both values in one transaction. An online snapshot must
+        # see one committed generation, even while another connection is updating it.
+        with sqlite3.connect(source) as database:
+            database.executemany("INSERT INTO settings VALUES (?, ?)", [("consistency_a", "0"), ("consistency_b", "0")])
+            database.execute("CREATE TABLE backup_padding(payload BLOB)")
+            database.execute("INSERT INTO backup_padding VALUES(zeroblob(4194304))")
+        stop_writer = threading.Event()
+        writer_ready = threading.Event()
+        writer_errors = []
+        generations = []
+
+        def write_generations():
+            try:
+                with sqlite3.connect(source, timeout=10) as database:
+                    generation = 0
+                    while not stop_writer.is_set():
+                        generation += 1
+                        database.execute("UPDATE settings SET value=? WHERE key IN ('consistency_a','consistency_b')", (str(generation),))
+                        database.commit()
+                        generations.append(generation)
+                        writer_ready.set()
+                        time.sleep(0.002)
+            except Exception as error:
+                writer_errors.append(str(error))
+                writer_ready.set()
+
+        writer = threading.Thread(target=write_generations)
+        writer.start()
+        concurrent_target = private / "concurrent.sqlite"
+        try:
+            check(writer_ready.wait(10) and not writer_errors, "concurrent source writer starts")
+            concurrent_result = command("backup", str(concurrent_target))
+        finally:
+            stop_writer.set()
+            writer.join(timeout=15)
+        check(concurrent_result.returncode == 0 and not writer.is_alive() and not writer_errors,
+              "online backup completes with a concurrent source writer: " + concurrent_result.stderr.strip())
+        with sqlite3.connect(concurrent_target) as snapshot:
+            pair = snapshot.execute("SELECT value FROM settings WHERE key IN ('consistency_a','consistency_b') ORDER BY key").fetchall()
+            check(snapshot.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                  and len(pair) == 2 and pair[0] == pair[1] and int(pair[0][0]) >= 1,
+                  "online backup contains an intact committed generation, never half a transaction")
+        check(generations and not list(private.glob(".share-backup-*")), "online backup preserves its source and cleans staging")
         # Refuse to back up if the mandatory document-root boundary cannot be resolved.
         public.unlink()
         rejected(private / "unverified.sqlite", private / "unverified.sqlite", "missing document root fails closed")
