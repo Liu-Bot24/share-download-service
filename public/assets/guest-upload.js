@@ -13,7 +13,7 @@
   function closed() {
     deadline = 0;
     document.querySelector('[data-window-label]').textContent = '收件窗口已关闭';
-    document.querySelector('[data-window-countdown]').textContent = form ? '请联系接收方重新开启，并获取新的上传链接。' : '填写启用时长，点击开启即可开始收件。';
+    document.querySelector('[data-window-countdown]').textContent = root.hasAttribute('data-guest-page') ? '请联系接收方重新开启，并获取新的上传链接。' : '填写启用时长，点击开启即可开始收件。';
     document.querySelector('.receive-dot')?.classList.remove('is-open');
     if (submit) submit.disabled = true;
     const link = document.querySelector('[data-active-receive-link]');
