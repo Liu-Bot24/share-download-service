@@ -150,6 +150,22 @@ final class FileMutations
             );
         }
         $committed = (bool) $operation["committed"];
+        // Never discard the retained copy until the side that must survive is verified.
+        // This also covers a missing target after commit or a changed source before rollback.
+        if ($committed && !$this->owns($operation["target"], $operation, "stage")) {
+            throw new RuntimeException(
+                "Committed file target is unavailable; recovery source retained for reconciliation.",
+            );
+        }
+        if (
+            !$committed &&
+            in_array($operation["kind"], ["trash", "restore"], true) &&
+            !$this->owns($operation["source"], $operation, "source")
+        ) {
+            throw new RuntimeException(
+                "Original source is unavailable; recovery snapshot retained for reconciliation.",
+            );
+        }
         if ($operation["kind"] === "trash") {
             $this->removeOwned(
                 $operation[$committed ? "source" : "stage"],
@@ -179,20 +195,7 @@ final class FileMutations
         if (!file_exists($path) && !is_link($path)) {
             return;
         }
-        $parent = realpath(dirname($path));
-        $trashRoot = realpath($this->store->storageDir . "/trash");
-        $allowed =
-            $parent === $this->store->filesDir ||
-            ($parent !== false &&
-                $trashRoot !== false &&
-                str_starts_with($parent, $trashRoot . "/"));
-        $stat = !$allowed || is_link($path) || !is_file($path) ? false : stat($path);
-        if (
-            !$stat ||
-            $stat["ino"] !== (int) $operation[$identity . "_inode"] ||
-            $stat["dev"] !== (int) $operation[$identity . "_device"] ||
-            !hash_equals($operation["sha256"], (string) hash_file("sha256", $path))
-        ) {
+        if (!$this->owns($path, $operation, $identity)) {
             if (!$requireMatch) {
                 return; // A competing external file is never ours to remove.
             }
@@ -203,5 +206,22 @@ final class FileMutations
         if (!unlink($path)) {
             throw new RuntimeException("Cannot finalize a recoverable file operation.");
         }
+    }
+
+    private function owns(string $path, array $operation, string $identity): bool
+    {
+        clearstatcache(true, $path);
+        $parent = realpath(dirname($path));
+        $trashRoot = realpath($this->store->storageDir . "/trash");
+        $allowed =
+            $parent === $this->store->filesDir ||
+            ($parent !== false &&
+                $trashRoot !== false &&
+                str_starts_with($parent, $trashRoot . "/"));
+        $stat = !$allowed || is_link($path) || !is_file($path) ? false : stat($path);
+        return $stat &&
+            $stat["ino"] === (int) $operation[$identity . "_inode"] &&
+            $stat["dev"] === (int) $operation[$identity . "_device"] &&
+            hash_equals($operation["sha256"], (string) hash_file("sha256", $path));
     }
 }

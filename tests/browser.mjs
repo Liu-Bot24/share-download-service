@@ -323,8 +323,12 @@ try {
         const response = await responsePromise;
         assert.equal(response.request().resourceType(), 'xhr');
         assert.equal(response.status(), 200);
-        assert.equal((await response.json()).ok, true);
+        assert.match(response.headers()['content-type'] || '', /application\/json/i);
+        // The product redirects only after parsing {ok:true}. Do not race CDP's response-body
+        // lifetime against that navigation: verify the rendered metadata and real stored bytes.
         await page.getByText('上传成功：' + name, { exact: true }).waitFor();
+        assert.equal(page.url(), base + '/admin/files');
+        assert.ok(await page.getByRole('link', { name, exact: true }).isVisible());
         assert.equal(await fs.readFile(path.join(tmp, 'files', name), 'utf8'), content);
     }
     await realUpload(uploadName);

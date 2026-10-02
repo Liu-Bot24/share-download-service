@@ -206,6 +206,61 @@ try {
         verify(true, "$kind can be retried after the injected failure");
     }
 
+    foreach (["restore", "trash", "publish"] as $kind) {
+        [$store, $a, $root] = fixture();
+        if ($kind === "restore") {
+            $store->trash($a["id"]);
+        }
+        $lost = null;
+        $store->db->pdo->sqliteCreateFunction(
+            "lose_published_target",
+            function () use ($store, &$lost): int {
+                $lost = $store->db->one("SELECT * FROM file_mutations");
+                unlink($lost["target"]);
+                return 1;
+            },
+            0,
+        );
+        $store->db->pdo->exec(
+            "CREATE TRIGGER lose_after_publication BEFORE UPDATE ON file_mutations WHEN NEW.committed=1 BEGIN SELECT lose_published_target(); END",
+        );
+        try {
+            if ($kind === "restore") {
+                $store->restore($a["id"], "test");
+            } elseif ($kind === "trash") {
+                $store->trash($a["id"]);
+            } else {
+                $store->importFile($root . "/replacement.txt", "new.txt");
+            }
+            throw new RuntimeException("Target loss was not detected");
+        } catch (RuntimeException $expected) {
+            verify(
+                str_contains($expected->getMessage(), "recovery source retained"),
+                "$kind detects a target lost after database commit",
+            );
+        }
+        $pending = $store->db->one("SELECT * FROM file_mutations");
+        verify(
+            $pending &&
+                (int) $pending["committed"] === 1 &&
+                !file_exists($pending["target"]) &&
+                hash_file("sha256", $pending["source"]) === $pending["sha256"],
+            "$kind retains its last good source and committed recovery journal",
+        );
+        $repairSource = $kind === "trash" ? $pending["source"] : $pending["stage"];
+        link($repairSource, $pending["target"]);
+        $store->db->pdo->exec("DROP TRIGGER lose_after_publication");
+        $store->scan();
+        verify(
+            (int) $store->db->one("SELECT COUNT(*) n FROM file_mutations")["n"] === 0,
+            "$kind recovery is retryable after its verified target is restored",
+        );
+        verify(
+            hash_file("sha256", $pending["target"]) === $pending["sha256"],
+            "$kind recovery keeps the committed entity's correct bytes",
+        );
+    }
+
     if (!function_exists("pcntl_fork") || !function_exists("posix_kill")) {
         throw new RuntimeException(
             "pcntl and posix are required for deterministic mutation/crash tests",
@@ -313,19 +368,16 @@ try {
         count($owners) <= 1,
         "mixed concurrent mutations leave at most one current filename owner",
     );
+    $consistent = true;
     foreach ($store->files() as $file) {
-        if ($file["state"] === "trashed") {
-            verify(
-                hash_file("sha256", trashPath($store, $file["id"])) === $file["sha256"],
-                "mixed race keeps every trashed entity intact",
-            );
-        } else {
-            verify(
-                $store->readable($file) && hash_file("sha256", $file["path"]) === $file["sha256"],
-                "mixed race keeps every current entity and hash consistent",
-            );
-        }
+        $consistent =
+            $consistent &&
+            ($file["state"] === "trashed"
+                ? hash_file("sha256", trashPath($store, $file["id"])) === $file["sha256"]
+                : $store->readable($file) &&
+                    hash_file("sha256", $file["path"]) === $file["sha256"]);
     }
+    verify($consistent, "mixed race keeps all current and recoverable entity hashes consistent");
     verify(
         $store->resolve("same.txt")["id"] === $a["id"],
         "mixed race never steals the original direct-link alias",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><meta name="referrer" content="same-origin">
 <title><?= h($title) ?> · Share Files</title>
-<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261001"><script src="/assets/app.js?v=20261001" defer></script>
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261002"><script src="/assets/app.js?v=20261002" defer></script>
 <noscript><style>.sidebar{position:static;transform:none;width:auto}.workspace-main{margin-left:0}.main-nav{flex-direction:row;flex-wrap:wrap}.sidebar-bottom,.nav-label,.mobile-menu,.mobile-nav-close{display:none!important}.sidebar .brand{margin-bottom:14px}.nav-item{flex:1;justify-content:center}.nav-count{display:none}[data-open-upload]{display:none!important}</style></noscript>
 </head>
 <body class="workspace page-<?= h($page) ?>">
