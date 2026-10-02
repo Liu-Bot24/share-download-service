@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><meta name="referrer" content="same-origin">
 <title><?= h($title) ?> · Share Files</title>
-<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261002"><script src="/assets/app.js?v=20261002" defer></script>
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/app.css?v=20261002-guest"><script src="/assets/app.js?v=20261002-guest" defer></script>
 <noscript><style>.sidebar{position:static;transform:none;width:auto}.workspace-main{margin-left:0}.main-nav{flex-direction:row;flex-wrap:wrap}.sidebar-bottom,.nav-label,.mobile-menu,.mobile-nav-close{display:none!important}.sidebar .brand{margin-bottom:14px}.nav-item{flex:1;justify-content:center}.nav-count{display:none}[data-open-upload]{display:none!important}</style></noscript>
-</head>
+<link rel="stylesheet" href="/assets/guest-upload.css?v=20261002-guest"></head>
 <body class="workspace page-<?= h($page) ?>">
 <a class="skip-link" href="#main-content">跳转到主要内容</a>
 <div class="mobile-scrim" data-close-navigation></div>
@@ -14,7 +14,7 @@
   <button class="icon-button mobile-nav-close" type="button" data-close-navigation aria-label="关闭导航"><?= sf_icon('close') ?></button>
   <div class="nav-label">工作空间</div>
   <nav class="main-nav">
-  <?php foreach([['overview','/admin','grid','概览'],['files','/admin/files','folder','文件管理'],['downloads','/admin/downloads','history','下载记录'],['analytics','/admin/analytics','chart','数据分析'],['settings','/admin/settings','settings','设置']]as[$key,$href,$icon,$label]): $active=$page===$key||($page==='file'&&$key==='files'); ?>
+  <?php foreach([['overview','/admin','grid','概览'],['files','/admin/files','folder','文件管理'],['receive','/admin/receive','upload','访客收件'],['downloads','/admin/downloads','history','下载记录'],['analytics','/admin/analytics','chart','数据分析'],['settings','/admin/settings','settings','设置']]as[$key,$href,$icon,$label]): $active=$page===$key||($page==='file'&&$key==='files'); ?>
   <a href="<?= h($href) ?>" class="nav-item<?= $active?' active':'' ?>" <?= $active?'aria-current="page"':'' ?>><?= sf_icon($icon) ?><span><?= h($label) ?></span><?php if($key==='files'&&isset($summary['active'])): ?><span class="nav-count"><?= sf_number($summary['active']) ?></span><?php endif ?></a>
   <?php endforeach ?>
   </nav>
@@ -42,7 +42,7 @@
   <form method="post" action="/admin/upload" enctype="multipart/form-data" data-upload-form>
     <?php sf_csrf($manager) ?><input type="hidden" name="MAX_FILE_SIZE" value="47185920">
     <label class="upload-dropzone" for="upload-file" data-dropzone><span class="upload-symbol"><?= sf_icon('upload') ?></span><strong data-upload-label>选择文件，或拖放到这里</strong><span data-upload-size>每次上传一个文件，最大 45 MiB</span><input id="upload-file" name="file" type="file" required data-file-input></label>
-    <p class="form-hint">同名文件不会被覆盖。新文件默认开放分享，不设密码和下载额度。</p>
+    <p class="form-hint">同名文件不会被覆盖。新文件默认不在首页展示；持有分享链接的人仍可直接下载。</p>
     <section class="upload-progress" data-upload-progress hidden aria-labelledby="upload-status-title">
       <div class="upload-progress-heading"><strong id="upload-status-title" data-upload-status>准备发送</strong><span data-upload-percent>0%</span></div>
       <div class="upload-progress-track" role="progressbar" aria-label="文件发送进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-describedby="upload-progress-detail" data-upload-progressbar><span data-upload-progress-fill></span></div>

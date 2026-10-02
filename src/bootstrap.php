@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . "/ShareStore.php";
 require_once __DIR__ . "/QueryService.php";
+require_once __DIR__ . "/GuestUploads.php";
 
 function share_store(): ShareStore
 {

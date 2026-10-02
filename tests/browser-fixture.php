@@ -70,4 +70,8 @@ $store->policy(
     ["policy_version" => $f["policy_version"], "state" => "paused"],
     "fixture",
 );
+// These fixtures intentionally represent shares the administrator opted into the homepage.
+foreach ($store->files() as $listed) {
+    $store->setHomepageVisibility($listed["id"], true, "fixture");
+}
 echo json_encode(["files" => $store->files()], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

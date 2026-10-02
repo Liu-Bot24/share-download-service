@@ -40,6 +40,8 @@ jobs:
         run: python3 tests/backup_test.py
       - name: Live isolated HTTP regressions
         run: python3 tests/http_test.py
+      - name: Homepage visibility and timed guest upload permissions
+        run: python3 tests/guest_upload_test.py
       - name: Install pinned browser test runtime
         run: |
           npm ci --ignore-scripts
@@ -49,6 +51,8 @@ jobs:
         run: python3 tests/nginx_test.py
       - name: Desktop and phone browser regressions
         run: node tests/browser.mjs
+      - name: Guest upload and visibility browser and curl regressions
+        run: node tests/guest_browser.mjs
       - name: Preserved independent browser checks with explicit XHR compatibility
         run: python3 tests/merge_gate_fixture.py browser-compat
       - name: Package verified release with locked PHP dependencies

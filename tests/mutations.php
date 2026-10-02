@@ -437,6 +437,8 @@ try {
         ],
         "test",
     );
+    verify($store->publicFiles() === [], "homepage discovery is opt-in for existing files");
+    $store->setHomepageVisibility($a["id"], true, "test");
     $public = $store->publicFiles();
     verify(
         count($public) === 1 &&

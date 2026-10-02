@@ -66,6 +66,7 @@ def main():
         base = f'http://127.0.0.1:{port}'; password = secrets.token_urlsafe(24)
         env = {**os.environ, 'SHARE_FILES_DIR': str(tmp/'files'), 'SHARE_STORAGE_DIR': str(tmp/'storage'), 'SHARE_BASE_URL': base, 'SHARE_ALLOW_HTTP': '1', 'FIXTURE_PASS': password, 'PHP_CLI_SERVER_WORKERS': '4'}
         fixture = r'''require 'src/bootstrap.php'; $s=share_store(); file_put_contents($s->storageDir.'/manager.json',json_encode(['username'=>'tester','password_hash'=>password_hash(getenv('FIXTURE_PASS'),PASSWORD_DEFAULT)])); $f=$s->resolve('protected.txt');$s->policy($f['id'],['policy_version'=>$f['policy_version'],'password_action'=>'set','password'=>'file-password'],'fixture');$f=$s->resolve('quota.txt');$s->policy($f['id'],['policy_version'=>$f['policy_version'],'quota_mode'=>'remaining','quota_amount'=>1],'fixture');'''
+        fixture += "foreach($s->files() as $listed){$s->setHomepageVisibility($listed['id'],true,'fixture');}"
         subprocess.run([PHP, '-r', fixture], cwd=ROOT, env=env, check=True)
         log = open(tmp/'server.log', 'w+')
         server = subprocess.Popen([PHP, '-S', f'127.0.0.1:{port}', '-t', 'public', 'scripts/dev-router.php'], cwd=ROOT, env=env, stdout=log, stderr=log, start_new_session=True)

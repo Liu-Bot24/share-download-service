@@ -35,6 +35,51 @@ try {
     $store = share_store();
     $path = parse_url($_SERVER["REQUEST_URI"] ?? "/", PHP_URL_PATH) ?: "/";
     $method = $_SERVER["REQUEST_METHOD"] ?? "GET";
+    if (
+        $path === "/upload" ||
+        preg_match('#^/upload/([a-f0-9]{64})(/status)?$#D', $path, $guestMatch)
+    ) {
+        header("X-Robots-Tag: noindex, nofollow");
+        $guests = new GuestUploads($store);
+        $guestToken = $guestMatch[1] ?? "";
+        $statusOnly = isset($guestMatch[2]);
+        method_only($statusOnly || $guestToken === "" ? ["GET", "HEAD"] : ["GET", "HEAD", "POST"]);
+        try {
+            $guestStatus = $guests->status($guestToken);
+        } catch (ShareError $closed) {
+            if ($method === "POST") {
+                throw $closed;
+            }
+            $guestStatus = ["active" => false, "server_time" => time(), "expires_at" => 0];
+            if ($guestToken !== "") {
+                http_response_code(410);
+            }
+        }
+        if ($method === "HEAD") {
+            exit();
+        }
+        if ($statusOnly) {
+            header("Content-Type: application/json");
+            echo json_encode($guestStatus);
+            exit();
+        }
+        $receipt = null;
+        if ($method === "POST") {
+            $receipt = $guests->upload($guestToken, $_FILES["file"] ?? [], request_context()["ip"]);
+            http_response_code(201);
+            if (str_contains($_SERVER["HTTP_ACCEPT"] ?? "", "application/json")) {
+                header("Content-Type: application/json");
+                echo json_encode($receipt, JSON_UNESCAPED_UNICODE);
+                exit();
+            }
+        }
+        render_public("guest-upload", [
+            "window" => $guestStatus,
+            "token" => $guestToken,
+            "receipt" => $receipt,
+        ]);
+        exit();
+    }
     if (preg_match('#^/d/([^/]+)(/unlock)?$#D', $path, $m)) {
         $unlock = isset($m[2]);
         method_only($unlock ? ["POST"] : ["GET", "HEAD"]);
@@ -208,6 +253,40 @@ try {
             flash("设置已保存，历史时间未被改写");
             redirect("/admin/settings");
         }
+        if ($path === "/admin/receive/open") {
+            $minutes = filter_var($_POST["minutes"] ?? null, FILTER_VALIDATE_INT);
+            if ($minutes === false) {
+                throw new ShareError("duration", "请填写整数分钟数");
+            }
+            (new GuestUploads($store))->open($minutes, $manager["username"]);
+            flash("访客上传已开启，请复制本次收件链接");
+            redirect("/admin/receive");
+        }
+        if ($path === "/admin/receive/close") {
+            (new GuestUploads($store))->close($manager["username"]);
+            flash("访客上传已关闭，尚未保存的上传将被拒绝");
+            redirect("/admin/receive");
+        }
+        if (preg_match('#^/admin/files/(\d+)/visibility$#D', $path, $m)) {
+            if (!in_array($_POST["visible"] ?? "", ["0", "1"], true)) {
+                throw new ShareError("visibility", "请选择首页显示或隐藏");
+            }
+            $store->setHomepageVisibility(
+                (int) $m[1],
+                $_POST["visible"] === "1",
+                $manager["username"],
+            );
+            flash(
+                $_POST["visible"] === "1"
+                    ? "已允许在首页显示；仍需处于可下载状态"
+                    : "已从公开首页隐藏，原分享链接不受影响",
+            );
+            redirect(
+                ($_POST["view"] ?? "") === "detail"
+                    ? "/admin/files/" . (int) $m[1] . "?tab=sharing"
+                    : "/admin/files",
+            );
+        }
         if (
             preg_match('#^/admin/files/(\d+)/(policy|download-ticket|trash|restore)$#D', $path, $m)
         ) {
@@ -307,6 +386,7 @@ try {
         "/admin/downloads" => "downloads",
         "/admin/analytics" => "analytics",
         "/admin/settings" => "settings",
+        "/admin/receive" => "receive",
         default => "",
     };
     if (preg_match('#^/admin/files/(\d+)$#D', $path, $m)) {
@@ -325,8 +405,8 @@ try {
         $data["events"] = $query->events(["days" => 30], 1, 6)["events"];
         $data["files"] = $store->files();
     }
-    if ($page === "files") {
-        $all = $store->files($_GET);
+    if ($page === "files" || $page === "receive") {
+        $all = $store->files($page === "receive" ? ["origin" => "guest"] : $_GET);
         $total = count($all);
         $pages = max(1, (int) ceil($total / 25));
         $p = max(1, min($pages, (int) ($_GET["page"] ?? 1)));
@@ -337,6 +417,9 @@ try {
             "total" => $total,
             "per_page" => 25,
         ];
+        if ($page === "receive") {
+            $data["window"] = (new GuestUploads($store))->window();
+        }
     }
     if ($page === "downloads") {
         $data = array_merge($data, $query->events($_GET, (int) ($_GET["page"] ?? 1)));
@@ -378,7 +461,7 @@ try {
     $status = $e instanceof ShareError ? $e->httpStatus : 400;
     $reason = $e instanceof ShareError ? $e->reason : "invalid";
     http_response_code($status);
-    if ($reason === "candidate_rate_limit") {
+    if (in_array($reason, ["candidate_rate_limit", "guest_rate_limit"], true)) {
         header("Retry-After: 60");
     }
     if (
@@ -412,6 +495,18 @@ try {
     $requestId = bin2hex(random_bytes(6));
     error_log("Share request " . $requestId . " failed: " . get_class($e));
     http_response_code(503);
+    if (str_contains($_SERVER["HTTP_ACCEPT"] ?? "", "application/json")) {
+        header("Content-Type: application/json");
+        echo json_encode(
+            [
+                "ok" => false,
+                "code" => "unavailable",
+                "message" => "服务暂时不可用，请稍后重试。参考编号：" . $requestId,
+            ],
+            JSON_UNESCAPED_UNICODE,
+        );
+        exit();
+    }
     if (($_SERVER["REQUEST_METHOD"] ?? "GET") !== "HEAD") {
         render_public("error", [
             "error" => "服务暂时不可用，请稍后重试。参考编号：" . $requestId,
