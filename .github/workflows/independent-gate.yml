@@ -1,0 +1,81 @@
+name: Independent Merge Gate 9c4edc1
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  independent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify fixed product source and original test bytes
+        run: |
+          git diff --exit-code 9c4edc1aa1aaf39fbcf527ebc72e4574fe2cc6d1 -- src public scripts templates composer.json composer.lock download-route.conf docs
+          python3 - <<'PY'
+          import hashlib,pathlib,subprocess
+          for name in ['tests/merge_gate_recovery.php','tests/merge_gate_migration.php','tests/merge_gate_http.py','tests/merge_gate_browser.mjs']:
+              original=subprocess.check_output(['git','show','3ca48d5ef789929c7a60c1ec4b18111cdc27ee17:'+name])
+              actual=pathlib.Path(name).read_bytes()
+              assert actual==original,name
+              print(name,hashlib.sha256(actual).hexdigest())
+          PY
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, sqlite3, fileinfo, mbstring, pcntl, posix
+          ini-values: upload_max_filesize=50M, post_max_size=52M
+          coverage: none
+      - name: Install locked PHP dependencies
+        run: composer install --no-dev --no-interaction --prefer-dist --no-scripts
+      - name: Original independent recovery and migration regressions
+        run: |
+          mkdir -p artifacts/independent
+          php tests/merge_gate_recovery.php | tee artifacts/independent/recovery.log
+          php tests/merge_gate_migration.php | tee artifacts/independent/migration.log
+      - name: Original independent HTTP regressions
+        run: python3 tests/merge_gate_fixture.py http | tee artifacts/independent/http.log
+      - name: Install pinned browser runtime
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Run exact original browser assertions
+        continue-on-error: true
+        run: python3 tests/merge_gate_fixture.py browser | tee artifacts/independent/browser-original.log
+      - name: Record compatibility changes for the new XHR error presentation
+        run: |
+          python3 - <<'PY'
+          import pathlib,difflib
+          p=pathlib.Path('tests/merge_gate_browser.mjs');original=p.read_text()
+          replacements={
+            "await page.waitForURL(base+'/admin/upload');":"await page.locator('[data-upload-error]').waitFor({state:'visible'});",
+            "page.locator('.error-description').innerText()":"page.locator('[data-upload-error]').innerText()",
+            "artifacts/gate/browser-additional":"artifacts/gate/browser-current-xhr",
+          }
+          adapted=original
+          for old,new in replacements.items():
+            assert old in adapted,old
+            adapted=adapted.replace(old,new)
+          pathlib.Path('artifacts/independent/browser-current.mjs').write_text(adapted)
+          pathlib.Path('artifacts/independent/browser-adaptation.diff').write_text(''.join(difflib.unified_diff(original.splitlines(True),adapted.splitlines(True),fromfile=str(p),tofile='browser-current.mjs')))
+          helper=pathlib.Path('tests/merge_gate_fixture.py').read_text()
+          needle='["node", "tests/merge_gate_browser.mjs"]'
+          assert needle in helper
+          pathlib.Path('tests/_merge_gate_fixture_current.py').write_text(helper.replace(needle,'["node", "artifacts/independent/browser-current.mjs"]'))
+          PY
+      - name: Independent browser semantics using current XHR presentation
+        run: python3 tests/_merge_gate_fixture_current.py browser | tee artifacts/independent/browser-current.log
+      - name: Preserve synthetic independent evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: independent-gate-9c4edc1
+          path: |
+            artifacts/independent/
+            artifacts/gate/browser-additional/
+            artifacts/gate/browser-current-xhr/
+          retention-days: 7
