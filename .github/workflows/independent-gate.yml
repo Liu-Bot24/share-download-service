@@ -1,6 +1,8 @@
 name: Independent Merge Gate 9c4edc1
 on:
   workflow_dispatch:
+  push:
+    branches: ['review/independent-9c4edc1']
 permissions:
   contents: read
 jobs:
