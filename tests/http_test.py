@@ -103,6 +103,17 @@ def main():
             check(status == 206 and body == b'0123' and headers['Content-Range'] == 'bytes 0-3/10', 'first valid partial transfer')
             status, _, body = client.request(token, headers={'Range':'bytes=4-'})
             check(status == 206 and body == b'456789' and count('public 中文.txt') == 1, 'resumed range uses same count')
+            # Receiving the final body byte can precede the server's finally block.
+            # Wait for both transfer records to finish, then assert the exact accounting.
+            deadline = time.monotonic() + 5
+            while True:
+                transfers = db.execute('SELECT t.ended_at FROM transfers t JOIN sessions s ON s.id=t.session_id WHERE s.token_hash=?',
+                                       (hashlib.sha256(token.rsplit('/', 1)[-1].encode()).hexdigest(),)).fetchall()
+                if len(transfers) == 2 and all(t['ended_at'] is not None for t in transfers):
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError('Range transfer accounting did not finish')
+                time.sleep(.005)
             event = dict(db.execute('SELECT * FROM events WHERE file_id=?',(row('public 中文.txt')['id'],)).fetchone())
             check(event['ip'] == '127.0.0.1' and event['referrer'] == 'example.org/from', 'actual peer IP and sanitized original source retained')
             check(event['request_count'] == 2 and event['observed_bytes'] == 10, 'request diagnostics sum partial bytes')
